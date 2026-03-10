@@ -1,0 +1,206 @@
+package handler
+
+import (
+	"errors"
+	"net/http"
+	"strconv"
+
+	"github.com/gin-gonic/gin"
+
+	"{{.ModulePath}}/internal/application/usecase"
+	infraRepo "{{.ModulePath}}/internal/infrastructure/repository"
+	"{{.ModulePath}}/internal/interfaces/dto"
+	"{{.ModulePath}}/pkg/logger"
+	"{{.ModulePath}}/pkg/response"
+	"{{.ModulePath}}/pkg/validator"
+)
+
+// {{.EntityName}}Handler handles HTTP requests for the {{.EntityName}} resource.
+type {{.EntityName}}Handler struct {
+	uc  usecase.{{.EntityName}}UseCase
+	log logger.Logger
+}
+
+// New{{.EntityName}}Handler creates a new {{.EntityName}}Handler.
+func New{{.EntityName}}Handler(uc usecase.{{.EntityName}}UseCase, log logger.Logger) *{{.EntityName}}Handler {
+	return &{{.EntityName}}Handler{uc: uc, log: log}
+}
+
+// RegisterRoutes registers all {{.EntityName}} routes on the given router group.
+func (h *{{.EntityName}}Handler) RegisterRoutes(rg *gin.RouterGroup) {
+	g := rg.Group("/{{.EntityNamePL}}")
+	g.POST("", h.Create)
+	g.GET("", h.GetAll)
+	g.GET("/:id", h.GetByID)
+	g.PUT("/:id", h.Update)
+	g.DELETE("/:id", h.Delete)
+}
+
+// Create godoc
+// @Summary     Create {{.EntityName}}
+// @Tags        {{.EntityNamePL}}
+// @Accept      json
+// @Produce     json
+// @Param       body body dto.Create{{.EntityName}}Request true "Create payload"
+// @Success     201 {object} response.Envelope
+// @Router      /{{.EntityNamePL}} [post]
+func (h *{{.EntityName}}Handler) Create(c *gin.Context) {
+	var req dto.Create{{.EntityName}}Request
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		h.log.Warn("{{.EntityName}}.Create bind failed", "error", err)
+		response.BadRequest(c, err.Error())
+		return
+	}
+
+	if err := validator.Struct(req); err != nil {
+		response.UnprocessableEntity(c, err)
+		return
+	}
+
+	item, err := h.uc.Create(c.Request.Context(), req)
+	if err != nil {
+		h.log.Error("{{.EntityName}}.Create failed", "error", err)
+		response.InternalServerError(c, "")
+		return
+	}
+
+	response.Created(c, item)
+}
+
+// GetAll godoc
+// @Summary     List {{.EntityNamePL}}
+// @Tags        {{.EntityNamePL}}
+// @Produce     json
+// @Param       page      query int false "Page number (default 1)"
+// @Param       page_size query int false "Items per page (default 20)"
+// @Success     200 {object} response.Envelope
+// @Router      /{{.EntityNamePL}} [get]
+func (h *{{.EntityName}}Handler) GetAll(c *gin.Context) {
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+
+	items, total, err := h.uc.GetAll(c.Request.Context(), page, pageSize)
+	if err != nil {
+		h.log.Error("{{.EntityName}}.GetAll failed", "error", err)
+		response.InternalServerError(c, "")
+		return
+	}
+
+	totalPages := total / int64(pageSize)
+	if total%int64(pageSize) != 0 {
+		totalPages++
+	}
+
+	response.OK(c, dto.PaginatedResponse{
+		Data:       items,
+		Total:      total,
+		Page:       page,
+		PageSize:   pageSize,
+		TotalPages: totalPages,
+	})
+}
+
+// GetByID godoc
+// @Summary     Get {{.EntityName}} by ID
+// @Tags        {{.EntityNamePL}}
+// @Produce     json
+// @Param       id path int true "{{.EntityName}} ID"
+// @Success     200 {object} response.Envelope
+// @Router      /{{.EntityNamePL}}/{id} [get]
+func (h *{{.EntityName}}Handler) GetByID(c *gin.Context) {
+	id, err := parseUintParam(c, "id")
+	if err != nil {
+		response.BadRequest(c, "id must be a positive integer")
+		return
+	}
+
+	item, err := h.uc.GetByID(c.Request.Context(), id)
+	if err != nil {
+		if errors.Is(err, infraRepo.Err{{.EntityName}}NotFound) {
+			response.NotFound(c, "{{.EntityNameLC}} not found")
+			return
+		}
+		h.log.Error("{{.EntityName}}.GetByID failed", "id", id, "error", err)
+		response.InternalServerError(c, "")
+		return
+	}
+
+	response.OK(c, item)
+}
+
+// Update godoc
+// @Summary     Update {{.EntityName}}
+// @Tags        {{.EntityNamePL}}
+// @Accept      json
+// @Produce     json
+// @Param       id   path int true "{{.EntityName}} ID"
+// @Param       body body dto.Update{{.EntityName}}Request true "Update payload"
+// @Success     200 {object} response.Envelope
+// @Router      /{{.EntityNamePL}}/{id} [put]
+func (h *{{.EntityName}}Handler) Update(c *gin.Context) {
+	id, err := parseUintParam(c, "id")
+	if err != nil {
+		response.BadRequest(c, "id must be a positive integer")
+		return
+	}
+
+	var req dto.Update{{.EntityName}}Request
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+
+	if err := validator.Struct(req); err != nil {
+		response.UnprocessableEntity(c, err)
+		return
+	}
+
+	item, err := h.uc.Update(c.Request.Context(), id, req)
+	if err != nil {
+		if errors.Is(err, infraRepo.Err{{.EntityName}}NotFound) {
+			response.NotFound(c, "{{.EntityNameLC}} not found")
+			return
+		}
+		h.log.Error("{{.EntityName}}.Update failed", "id", id, "error", err)
+		response.InternalServerError(c, "")
+		return
+	}
+
+	response.OK(c, item)
+}
+
+// Delete godoc
+// @Summary     Delete {{.EntityName}}
+// @Tags        {{.EntityNamePL}}
+// @Produce     json
+// @Param       id path int true "{{.EntityName}} ID"
+// @Success     204
+// @Router      /{{.EntityNamePL}}/{id} [delete]
+func (h *{{.EntityName}}Handler) Delete(c *gin.Context) {
+	id, err := parseUintParam(c, "id")
+	if err != nil {
+		response.BadRequest(c, "id must be a positive integer")
+		return
+	}
+
+	if err := h.uc.Delete(c.Request.Context(), id); err != nil {
+		if errors.Is(err, infraRepo.Err{{.EntityName}}NotFound) {
+			response.NotFound(c, "{{.EntityNameLC}} not found")
+			return
+		}
+		h.log.Error("{{.EntityName}}.Delete failed", "id", id, "error", err)
+		response.InternalServerError(c, "")
+		return
+	}
+
+	c.Status(http.StatusNoContent)
+}
+
+func parseUintParam(c *gin.Context, param string) (uint, error) {
+	val, err := strconv.ParseUint(c.Param(param), 10, 64)
+	if err != nil || val == 0 {
+		return 0, err
+	}
+	return uint(val), nil
+}

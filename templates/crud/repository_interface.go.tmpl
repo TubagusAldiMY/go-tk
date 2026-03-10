@@ -1,0 +1,17 @@
+package repository
+
+import (
+	"context"
+
+	"{{.ModulePath}}/internal/domain/entity"
+)
+
+// {{.EntityName}}Repository defines the persistence contract for {{.EntityName}}.
+// Implementations live in internal/infrastructure/repository.
+type {{.EntityName}}Repository interface {
+	Create(ctx context.Context, e *entity.{{.EntityName}}) error
+	FindByID(ctx context.Context, id uint) (*entity.{{.EntityName}}, error)
+	FindAll(ctx context.Context, page, pageSize int) ([]*entity.{{.EntityName}}, int64, error)
+	Update(ctx context.Context, e *entity.{{.EntityName}}) error
+	Delete(ctx context.Context, id uint) error
+}

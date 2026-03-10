@@ -1,0 +1,91 @@
+package repository
+
+import (
+	"context"
+	"errors"
+	"fmt"
+
+	"gorm.io/gorm"
+
+	"{{.ModulePath}}/internal/domain/entity"
+	domainRepo "{{.ModulePath}}/internal/domain/repository"
+	"{{.ModulePath}}/pkg/logger"
+)
+
+// Sentinel errors.
+var (
+	Err{{.EntityName}}NotFound = fmt.Errorf("{{.EntityNameLC}} not found")
+)
+
+type {{.EntityNameLC}}Repository struct {
+	db  *gorm.DB
+	log logger.Logger
+}
+
+// New{{.EntityName}}Repository creates a GORM-backed {{.EntityName}}Repository.
+func New{{.EntityName}}Repository(db *gorm.DB, log logger.Logger) domainRepo.{{.EntityName}}Repository {
+	return &{{.EntityNameLC}}Repository{db: db, log: log}
+}
+
+func (r *{{.EntityNameLC}}Repository) Create(ctx context.Context, e *entity.{{.EntityName}}) error {
+	if err := r.db.WithContext(ctx).Create(e).Error; err != nil {
+		r.log.Error("{{.EntityNameLC}}.Create failed", "error", err)
+		return fmt.Errorf("create {{.EntityNameLC}}: %w", err)
+	}
+	return nil
+}
+
+func (r *{{.EntityNameLC}}Repository) FindByID(ctx context.Context, id uint) (*entity.{{.EntityName}}, error) {
+	var e entity.{{.EntityName}}
+	result := r.db.WithContext(ctx).First(&e, id)
+	if result.Error != nil {
+		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+			return nil, Err{{.EntityName}}NotFound
+		}
+		r.log.Error("{{.EntityNameLC}}.FindByID failed", "id", id, "error", result.Error)
+		return nil, fmt.Errorf("find {{.EntityNameLC}} by id: %w", result.Error)
+	}
+	return &e, nil
+}
+
+func (r *{{.EntityNameLC}}Repository) FindAll(ctx context.Context, page, pageSize int) ([]*entity.{{.EntityName}}, int64, error) {
+	var items []*entity.{{.EntityName}}
+	var total int64
+
+	offset := (page - 1) * pageSize
+
+	if err := r.db.WithContext(ctx).Model(&entity.{{.EntityName}}{}).Count(&total).Error; err != nil {
+		return nil, 0, fmt.Errorf("count {{.EntityNamePL}}: %w", err)
+	}
+
+	if err := r.db.WithContext(ctx).Limit(pageSize).Offset(offset).Find(&items).Error; err != nil {
+		r.log.Error("{{.EntityNameLC}}.FindAll failed", "error", err)
+		return nil, 0, fmt.Errorf("find all {{.EntityNamePL}}: %w", err)
+	}
+
+	return items, total, nil
+}
+
+func (r *{{.EntityNameLC}}Repository) Update(ctx context.Context, e *entity.{{.EntityName}}) error {
+	result := r.db.WithContext(ctx).Save(e)
+	if result.Error != nil {
+		r.log.Error("{{.EntityNameLC}}.Update failed", "id", e.ID, "error", result.Error)
+		return fmt.Errorf("update {{.EntityNameLC}}: %w", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return Err{{.EntityName}}NotFound
+	}
+	return nil
+}
+
+func (r *{{.EntityNameLC}}Repository) Delete(ctx context.Context, id uint) error {
+	result := r.db.WithContext(ctx).Delete(&entity.{{.EntityName}}{}, id)
+	if result.Error != nil {
+		r.log.Error("{{.EntityNameLC}}.Delete failed", "id", id, "error", result.Error)
+		return fmt.Errorf("delete {{.EntityNameLC}}: %w", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return Err{{.EntityName}}NotFound
+	}
+	return nil
+}

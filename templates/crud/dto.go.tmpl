@@ -1,0 +1,39 @@
+package dto
+
+// Create{{.EntityName}}Request holds fields for creating a new {{.EntityName}}.
+type Create{{.EntityName}}Request struct {
+{{- range .Fields}}
+	{{.Name}} {{.GoType}} `json:"{{.JSONTag}}"{{if .ValidTag}} validate:"{{.ValidTag}}"{{end}}`
+{{- end}}
+}
+
+// Update{{.EntityName}}Request holds fields for updating an existing {{.EntityName}}.
+// All fields are optional — only non-zero values are applied.
+type Update{{.EntityName}}Request struct {
+{{- range .Fields}}
+	{{.Name}} {{.GoType}} `json:"{{.JSONTag}}"{{if .ValidTag}} validate:"{{.ValidTag}}"{{end}}`
+{{- end}}
+}
+
+// {{.EntityName}}Response is the API representation of a {{.EntityName}}.
+type {{.EntityName}}Response struct {
+	ID uint `json:"id"`
+{{- range .Fields}}
+	{{.Name}} {{.GoType}} `json:"{{.JSONTag}}"`
+{{- end}}
+}
+
+// From{{.EntityName}} converts a domain entity to a response DTO.
+func From{{.EntityName}}(e interface{ /* entity.{{.EntityName}} */ }) *{{.EntityName}}Response {
+	// TODO: populate fields after confirming entity import
+	return &{{.EntityName}}Response{}
+}
+
+// PaginatedResponse wraps a list of items with pagination metadata.
+type PaginatedResponse struct {
+	Data       any   `json:"data"`
+	Total      int64 `json:"total"`
+	Page       int   `json:"page"`
+	PageSize   int   `json:"page_size"`
+	TotalPages int64 `json:"total_pages"`
+}

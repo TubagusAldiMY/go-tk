@@ -1,0 +1,94 @@
+package usecase
+
+import (
+	"context"
+	"errors"
+	"fmt"
+
+	"{{.ModulePath}}/internal/domain/entity"
+	"{{.ModulePath}}/internal/domain/repository"
+	"{{.ModulePath}}/internal/interfaces/dto"
+	infraRepo "{{.ModulePath}}/internal/infrastructure/repository"
+	"{{.ModulePath}}/pkg/logger"
+)
+
+// {{.EntityName}}UseCase defines the business operations for {{.EntityName}}.
+type {{.EntityName}}UseCase interface {
+	Create(ctx context.Context, req dto.Create{{.EntityName}}Request) (*entity.{{.EntityName}}, error)
+	GetByID(ctx context.Context, id uint) (*entity.{{.EntityName}}, error)
+	GetAll(ctx context.Context, page, pageSize int) ([]*entity.{{.EntityName}}, int64, error)
+	Update(ctx context.Context, id uint, req dto.Update{{.EntityName}}Request) (*entity.{{.EntityName}}, error)
+	Delete(ctx context.Context, id uint) error
+}
+
+type {{.EntityNameLC}}UseCase struct {
+	repo repository.{{.EntityName}}Repository
+	log  logger.Logger
+}
+
+// New{{.EntityName}}UseCase creates a new {{.EntityName}}UseCase.
+func New{{.EntityName}}UseCase(repo repository.{{.EntityName}}Repository, log logger.Logger) {{.EntityName}}UseCase {
+	return &{{.EntityNameLC}}UseCase{repo: repo, log: log}
+}
+
+func (uc *{{.EntityNameLC}}UseCase) Create(ctx context.Context, req dto.Create{{.EntityName}}Request) (*entity.{{.EntityName}}, error) {
+	e := &entity.{{.EntityName}}{
+{{- range .Fields}}
+		{{.Name}}: req.{{.Name}},
+{{- end}}
+	}
+
+	if err := uc.repo.Create(ctx, e); err != nil {
+		return nil, fmt.Errorf("{{.EntityNameLC}}.Create: %w", err)
+	}
+
+	uc.log.Info("{{.EntityNameLC}} created", "id", e.ID)
+	return e, nil
+}
+
+func (uc *{{.EntityNameLC}}UseCase) GetByID(ctx context.Context, id uint) (*entity.{{.EntityName}}, error) {
+	e, err := uc.repo.FindByID(ctx, id)
+	if err != nil {
+		if errors.Is(err, infraRepo.Err{{.EntityName}}NotFound) {
+			return nil, err
+		}
+		return nil, fmt.Errorf("{{.EntityNameLC}}.GetByID: %w", err)
+	}
+	return e, nil
+}
+
+func (uc *{{.EntityNameLC}}UseCase) GetAll(ctx context.Context, page, pageSize int) ([]*entity.{{.EntityName}}, int64, error) {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 20
+	}
+	return uc.repo.FindAll(ctx, page, pageSize)
+}
+
+func (uc *{{.EntityNameLC}}UseCase) Update(ctx context.Context, id uint, req dto.Update{{.EntityName}}Request) (*entity.{{.EntityName}}, error) {
+	e, err := uc.repo.FindByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+{{- range .Fields}}
+	e.{{.Name}} = req.{{.Name}}
+{{- end}}
+
+	if err := uc.repo.Update(ctx, e); err != nil {
+		return nil, fmt.Errorf("{{.EntityNameLC}}.Update: %w", err)
+	}
+
+	uc.log.Info("{{.EntityNameLC}} updated", "id", id)
+	return e, nil
+}
+
+func (uc *{{.EntityNameLC}}UseCase) Delete(ctx context.Context, id uint) error {
+	if err := uc.repo.Delete(ctx, id); err != nil {
+		return fmt.Errorf("{{.EntityNameLC}}.Delete: %w", err)
+	}
+	uc.log.Info("{{.EntityNameLC}} deleted", "id", id)
+	return nil
+}

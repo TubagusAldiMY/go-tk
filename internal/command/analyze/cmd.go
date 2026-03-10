@@ -29,6 +29,9 @@ Checks performed:
   • Missing input validation (bind without validate)
   • N+1 query patterns (DB call inside loop)
   • Hardcoded credentials and config values
+  • Dead routes & orphaned handlers (routes with no handler / handlers never routed)
+  • Missing auth middleware (mutable routes on sensitive paths without auth)
+  • Circular imports (import cycles in internal packages)
 
 Outputs a health score (0–100) and a graded report.
 
@@ -75,6 +78,18 @@ func runAnalyze(minSeverityStr string, failUnder int) error {
 
 	runCheck(result, "Hardcoded values", func() ([]types.Issue, int, error) {
 		return checks.CheckHardcodedValues(cwd + "/internal")
+	})
+
+	runCheck(result, "Dead routes & orphaned handlers", func() ([]types.Issue, int, error) {
+		return checks.CheckDeadRoutes(cwd + "/internal")
+	})
+
+	runCheck(result, "Missing auth middleware", func() ([]types.Issue, int, error) {
+		return checks.CheckMissingAuth(cwd + "/internal")
+	})
+
+	runCheck(result, "Circular imports", func() ([]types.Issue, int, error) {
+		return checks.CheckCircularImports(cwd)
 	})
 
 	// Compute health score

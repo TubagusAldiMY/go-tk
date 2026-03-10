@@ -1,0 +1,59 @@
+version: 2
+
+project_name: go-tk
+
+before:
+  hooks:
+    - go mod tidy
+    - go generate ./...
+
+builds:
+  - id: go-tk
+    main: ./cmd/go-tk/
+    binary: go-tk
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X github.com/TubagusAldiMY/go-tk/cmd/go-tk/build.Version={{.Version}}
+      - -X github.com/TubagusAldiMY/go-tk/cmd/go-tk/build.Commit={{.Commit}}
+      - -X github.com/TubagusAldiMY/go-tk/cmd/go-tk/build.Date={{.Date}}
+
+archives:
+  - id: go-tk
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        format: zip
+    files:
+      - README.md
+      - LICENSE
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+      - "^chore:"
+      - Merge pull request
+      - Merge branch
+
+release:
+  github:
+    owner: TubagusAldiMY
+    name: go-tk
+  draft: false
+  prerelease: auto

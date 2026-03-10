@@ -27,7 +27,8 @@ type CRUDData struct {
 	Timestamps   bool
 	MigrationVer string // timestamp: "20260309120000"
 	GeneratedAt  string // human date: "2026-03-09"
-	Framework    string
+	Framework    string // "gin" | "fiber"
+	Database     string // "postgres" | "mysql"
 }
 
 // GeneratedFile tracks a file that was (or would be) generated.
@@ -51,6 +52,7 @@ func Generate(entityName string, cfg *config.Config, fields []FieldDef, force, d
 		MigrationVer: now.Format("20060102150405"),
 		GeneratedAt:  now.Format("2006-01-02"),
 		Framework:    cfg.Stack.Framework,
+		Database:     cfg.Stack.Database,
 	}
 
 	engine := generator.NewEngine(TemplatesFS, "crud")
@@ -60,9 +62,9 @@ func Generate(entityName string, cfg *config.Config, fields []FieldDef, force, d
 		{TemplateName: "repository_interface.go.tmpl", OutputPath: filepath.Join("internal/domain/repository", toSnakeCase(entityName)+"_repository.go")},
 		{TemplateName: "repository_impl.go.tmpl", OutputPath: filepath.Join(cfg.Paths.Repos, toSnakeCase(entityName)+"_repo.go")},
 		{TemplateName: "usecase.go.tmpl", OutputPath: filepath.Join(cfg.Paths.Services, toSnakeCase(entityName)+"_usecase.go")},
-		{TemplateName: "handler.go.tmpl", OutputPath: filepath.Join(cfg.Paths.Handlers, toSnakeCase(entityName)+"_handler.go")},
+		{TemplateName: handlerTemplate(cfg.Stack.Framework), OutputPath: filepath.Join(cfg.Paths.Handlers, toSnakeCase(entityName)+"_handler.go")},
 		{TemplateName: "dto.go.tmpl", OutputPath: filepath.Join("internal/interfaces/dto", toSnakeCase(entityName)+"_dto.go")},
-		{TemplateName: "migration.up.sql.tmpl", OutputPath: filepath.Join(cfg.Paths.Migrations, data.MigrationVer+"_create_"+data.TableName+".up.sql")},
+		{TemplateName: migrationUpTemplate(cfg.Stack.Database), OutputPath: filepath.Join(cfg.Paths.Migrations, data.MigrationVer+"_create_"+data.TableName+".up.sql")},
 		{TemplateName: "migration.down.sql.tmpl", OutputPath: filepath.Join(cfg.Paths.Migrations, data.MigrationVer+"_create_"+data.TableName+".down.sql")},
 	}
 
@@ -121,6 +123,22 @@ func printCRUDNextSteps(entity, entityLC, entityPL string) {
 	ui.PrintHint("Run migrations:")
 	fmt.Println("  go-tk migrate up")
 	fmt.Println()
+}
+
+// handlerTemplate returns the correct handler template name for the given framework.
+func handlerTemplate(framework string) string {
+	if framework == "fiber" {
+		return "handler_fiber.go.tmpl"
+	}
+	return "handler_gin.go.tmpl"
+}
+
+// migrationUpTemplate returns the correct migration up template for the given database.
+func migrationUpTemplate(database string) string {
+	if database == "mysql" {
+		return "migration.up.mysql.sql.tmpl"
+	}
+	return "migration.up.postgres.sql.tmpl"
 }
 
 // toPlural appends 's' or applies simple English plural rules.

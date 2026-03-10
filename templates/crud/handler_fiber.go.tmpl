@@ -1,0 +1,190 @@
+package handler
+
+import (
+	"errors"
+	"strconv"
+
+	"github.com/gofiber/fiber/v2"
+
+	"{{.ModulePath}}/internal/application/usecase"
+	infraRepo "{{.ModulePath}}/internal/infrastructure/repository"
+	"{{.ModulePath}}/internal/interfaces/dto"
+	"{{.ModulePath}}/pkg/logger"
+	"{{.ModulePath}}/pkg/response"
+	"{{.ModulePath}}/pkg/validator"
+)
+
+// {{.EntityName}}Handler handles HTTP requests for the {{.EntityName}} resource.
+type {{.EntityName}}Handler struct {
+	uc  usecase.{{.EntityName}}UseCase
+	log logger.Logger
+}
+
+// New{{.EntityName}}Handler creates a new {{.EntityName}}Handler.
+func New{{.EntityName}}Handler(uc usecase.{{.EntityName}}UseCase, log logger.Logger) *{{.EntityName}}Handler {
+	return &{{.EntityName}}Handler{uc: uc, log: log}
+}
+
+// RegisterRoutes registers all {{.EntityName}} routes on the given Fiber router.
+func (h *{{.EntityName}}Handler) RegisterRoutes(r fiber.Router) {
+	g := r.Group("/{{.EntityNamePL}}")
+	g.Post("", h.Create)
+	g.Get("", h.GetAll)
+	g.Get("/:id", h.GetByID)
+	g.Put("/:id", h.Update)
+	g.Delete("/:id", h.Delete)
+}
+
+// Create godoc
+// @Summary     Create {{.EntityName}}
+// @Tags        {{.EntityNamePL}}
+// @Accept      json
+// @Produce     json
+// @Param       body body dto.Create{{.EntityName}}Request true "Create payload"
+// @Success     201 {object} response.Envelope
+// @Router      /{{.EntityNamePL}} [post]
+func (h *{{.EntityName}}Handler) Create(c *fiber.Ctx) error {
+	var req dto.Create{{.EntityName}}Request
+
+	if err := c.BodyParser(&req); err != nil {
+		h.log.Warn("{{.EntityName}}.Create bind failed", "error", err)
+		return response.BadRequest(c, err.Error())
+	}
+
+	if err := validator.Struct(req); err != nil {
+		return response.UnprocessableEntity(c, err)
+	}
+
+	item, err := h.uc.Create(c.UserContext(), req)
+	if err != nil {
+		h.log.Error("{{.EntityName}}.Create failed", "error", err)
+		return response.InternalServerError(c)
+	}
+
+	return response.Created(c, item)
+}
+
+// GetAll godoc
+// @Summary     List {{.EntityNamePL}}
+// @Tags        {{.EntityNamePL}}
+// @Produce     json
+// @Param       page      query int false "Page number (default 1)"
+// @Param       page_size query int false "Items per page (default 20)"
+// @Success     200 {object} response.Envelope
+// @Router      /{{.EntityNamePL}} [get]
+func (h *{{.EntityName}}Handler) GetAll(c *fiber.Ctx) error {
+	page := c.QueryInt("page", 1)
+	pageSize := c.QueryInt("page_size", 20)
+
+	items, total, err := h.uc.GetAll(c.UserContext(), page, pageSize)
+	if err != nil {
+		h.log.Error("{{.EntityName}}.GetAll failed", "error", err)
+		return response.InternalServerError(c)
+	}
+
+	totalPages := total / int64(pageSize)
+	if total%int64(pageSize) != 0 {
+		totalPages++
+	}
+
+	return response.OK(c, dto.PaginatedResponse{
+		Data:       items,
+		Total:      total,
+		Page:       page,
+		PageSize:   pageSize,
+		TotalPages: totalPages,
+	})
+}
+
+// GetByID godoc
+// @Summary     Get {{.EntityName}} by ID
+// @Tags        {{.EntityNamePL}}
+// @Produce     json
+// @Param       id path int true "{{.EntityName}} ID"
+// @Success     200 {object} response.Envelope
+// @Router      /{{.EntityNamePL}}/{id} [get]
+func (h *{{.EntityName}}Handler) GetByID(c *fiber.Ctx) error {
+	id, err := fiberParamUint(c, "id")
+	if err != nil {
+		return response.BadRequest(c, "id must be a positive integer")
+	}
+
+	item, err := h.uc.GetByID(c.UserContext(), id)
+	if err != nil {
+		if errors.Is(err, infraRepo.Err{{.EntityName}}NotFound) {
+			return response.NotFound(c, "{{.EntityNameLC}} not found")
+		}
+		h.log.Error("{{.EntityName}}.GetByID failed", "id", id, "error", err)
+		return response.InternalServerError(c)
+	}
+
+	return response.OK(c, item)
+}
+
+// Update godoc
+// @Summary     Update {{.EntityName}}
+// @Tags        {{.EntityNamePL}}
+// @Accept      json
+// @Produce     json
+// @Param       id   path int true "{{.EntityName}} ID"
+// @Param       body body dto.Update{{.EntityName}}Request true "Update payload"
+// @Success     200 {object} response.Envelope
+// @Router      /{{.EntityNamePL}}/{id} [put]
+func (h *{{.EntityName}}Handler) Update(c *fiber.Ctx) error {
+	id, err := fiberParamUint(c, "id")
+	if err != nil {
+		return response.BadRequest(c, "id must be a positive integer")
+	}
+
+	var req dto.Update{{.EntityName}}Request
+	if err := c.BodyParser(&req); err != nil {
+		return response.BadRequest(c, err.Error())
+	}
+
+	if err := validator.Struct(req); err != nil {
+		return response.UnprocessableEntity(c, err)
+	}
+
+	item, err := h.uc.Update(c.UserContext(), id, req)
+	if err != nil {
+		if errors.Is(err, infraRepo.Err{{.EntityName}}NotFound) {
+			return response.NotFound(c, "{{.EntityNameLC}} not found")
+		}
+		h.log.Error("{{.EntityName}}.Update failed", "id", id, "error", err)
+		return response.InternalServerError(c)
+	}
+
+	return response.OK(c, item)
+}
+
+// Delete godoc
+// @Summary     Delete {{.EntityName}}
+// @Tags        {{.EntityNamePL}}
+// @Produce     json
+// @Param       id path int true "{{.EntityName}} ID"
+// @Success     204
+// @Router      /{{.EntityNamePL}}/{id} [delete]
+func (h *{{.EntityName}}Handler) Delete(c *fiber.Ctx) error {
+	id, err := fiberParamUint(c, "id")
+	if err != nil {
+		return response.BadRequest(c, "id must be a positive integer")
+	}
+
+	if err := h.uc.Delete(c.UserContext(), id); err != nil {
+		if errors.Is(err, infraRepo.Err{{.EntityName}}NotFound) {
+			return response.NotFound(c, "{{.EntityNameLC}} not found")
+		}
+		h.log.Error("{{.EntityName}}.Delete failed", "id", id, "error", err)
+		return response.InternalServerError(c)
+	}
+
+	return c.SendStatus(fiber.StatusNoContent)
+}
+
+func fiberParamUint(c *fiber.Ctx, param string) (uint, error) {
+	val, err := strconv.ParseUint(c.Params(param), 10, 64)
+	if err != nil || val == 0 {
+		return 0, err
+	}
+	return uint(val), nil
+}

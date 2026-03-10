@@ -7,16 +7,17 @@ import (
 
 // FieldDef holds all derived information about a single entity field.
 type FieldDef struct {
-	Name       string // PascalCase: "ProductName"
-	NameLC     string // camelCase:  "productName"
-	NameSnake  string // snake_case: "product_name"
-	GoType     string // "string", "float64", "int", "bool", "*string"
-	DBType     string // "VARCHAR(255)", "DECIMAL(10,2)", "INTEGER", "BOOLEAN"
-	GormTag    string // "column:product_name;type:varchar(255);not null"
-	JSONTag    string // "product_name"
-	ValidTag   string // "required,max=255"
-	ColumnName string // snake_case, same as NameSnake
-	Required   bool
+	Name        string // PascalCase: "ProductName"
+	NameLC      string // camelCase:  "productName"
+	NameSnake   string // snake_case: "product_name"
+	GoType      string // "string", "float64", "int", "bool", "*string"
+	DBType      string // PostgreSQL: "VARCHAR(255)", "INTEGER", "BYTEA"
+	DBTypeMySQL string // MySQL:      "VARCHAR(255)", "INT", "BLOB"
+	GormTag     string // "column:product_name;type:varchar(255);not null"
+	JSONTag     string // "product_name"
+	ValidTag    string // "required,max=255"
+	ColumnName  string // snake_case, same as NameSnake
+	Required    bool
 }
 
 // goTypeToDBType maps Go primitive types to PostgreSQL column types.
@@ -30,6 +31,19 @@ var goTypeToDBType = map[string]string{
 	"float64": "DECIMAL(10,4)",
 	"bool":    "BOOLEAN",
 	"[]byte":  "BYTEA",
+}
+
+// goTypeToDBTypeMySQL maps Go primitive types to MySQL column types.
+var goTypeToDBTypeMySQL = map[string]string{
+	"string":  "VARCHAR(255)",
+	"int":     "INT",
+	"int64":   "BIGINT",
+	"uint":    "INT UNSIGNED",
+	"uint64":  "BIGINT UNSIGNED",
+	"float32": "DECIMAL(10,4)",
+	"float64": "DECIMAL(10,4)",
+	"bool":    "TINYINT(1)",
+	"[]byte":  "BLOB",
 }
 
 // ParseFields parses a comma-separated field definition string.
@@ -68,6 +82,11 @@ func ParseFields(raw string) ([]FieldDef, error) {
 			dbType = "TEXT" // safe fallback
 		}
 
+		dbTypeMySQL, ok := goTypeToDBTypeMySQL[rawType]
+		if !ok {
+			dbTypeMySQL = "TEXT" // safe fallback
+		}
+
 		snake := toSnakeCase(rawName)
 		pascal := toPascalCase(rawName)
 
@@ -85,16 +104,17 @@ func ParseFields(raw string) ([]FieldDef, error) {
 		}
 
 		fields = append(fields, FieldDef{
-			Name:       pascal,
-			NameLC:     toCamelCase(rawName),
-			NameSnake:  snake,
-			GoType:     goType,
-			DBType:     dbType,
-			GormTag:    gormTag,
-			JSONTag:    snake,
-			ValidTag:   validTag,
-			ColumnName: snake,
-			Required:   !optional,
+			Name:        pascal,
+			NameLC:      toCamelCase(rawName),
+			NameSnake:   snake,
+			GoType:      goType,
+			DBType:      dbType,
+			DBTypeMySQL: dbTypeMySQL,
+			GormTag:     gormTag,
+			JSONTag:     snake,
+			ValidTag:    validTag,
+			ColumnName:  snake,
+			Required:    !optional,
 		})
 	}
 

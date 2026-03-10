@@ -115,6 +115,52 @@ func TestParseFieldsInvalidFormat(t *testing.T) {
 	}
 }
 
+func TestParseFieldsDBTypeMySQL(t *testing.T) {
+	fields, err := ParseFields("name:string,count:int,price:float64,active:bool,data:[]byte")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := map[string]string{
+		"name":   "VARCHAR(255)",
+		"count":  "INT",
+		"price":  "DECIMAL(10,4)",
+		"active": "TINYINT(1)",
+		"data":   "BLOB",
+	}
+	for _, f := range fields {
+		if exp, ok := want[f.NameSnake]; ok {
+			if f.DBTypeMySQL != exp {
+				t.Errorf("DBTypeMySQL for %q = %q, want %q", f.NameSnake, f.DBTypeMySQL, exp)
+			}
+		}
+	}
+}
+
+func TestHandlerTemplate(t *testing.T) {
+	if got := handlerTemplate("fiber"); got != "handler_fiber.go.tmpl" {
+		t.Errorf("handlerTemplate(fiber) = %q", got)
+	}
+	if got := handlerTemplate("gin"); got != "handler_gin.go.tmpl" {
+		t.Errorf("handlerTemplate(gin) = %q", got)
+	}
+	if got := handlerTemplate(""); got != "handler_gin.go.tmpl" {
+		t.Errorf("handlerTemplate('') = %q, want gin default", got)
+	}
+}
+
+func TestMigrationUpTemplate(t *testing.T) {
+	if got := migrationUpTemplate("mysql"); got != "migration.up.mysql.sql.tmpl" {
+		t.Errorf("migrationUpTemplate(mysql) = %q", got)
+	}
+	if got := migrationUpTemplate("postgres"); got != "migration.up.postgres.sql.tmpl" {
+		t.Errorf("migrationUpTemplate(postgres) = %q", got)
+	}
+	if got := migrationUpTemplate(""); got != "migration.up.postgres.sql.tmpl" {
+		t.Errorf("migrationUpTemplate('') = %q, want postgres default", got)
+	}
+}
+
 func TestFieldCaseHelpers(t *testing.T) {
 	cases := []struct {
 		input  string

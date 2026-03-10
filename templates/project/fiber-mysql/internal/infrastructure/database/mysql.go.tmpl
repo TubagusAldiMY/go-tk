@@ -1,0 +1,39 @@
+// Package database provides the MySQL connection and health check.
+package database
+
+import (
+	"fmt"
+	"time"
+
+	"gorm.io/driver/mysql"
+	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
+)
+
+// NewMySQL opens a GORM connection to MySQL using the provided DSN.
+func NewMySQL(dsn string) (*gorm.DB, error) {
+	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{
+		Logger:                 logger.Default.LogMode(logger.Silent),
+		PrepareStmt:            true,
+		SkipDefaultTransaction: true,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("connecting to mysql: %w", err)
+	}
+
+	sqlDB, err := db.DB()
+	if err != nil {
+		return nil, fmt.Errorf("getting underlying sql.DB: %w", err)
+	}
+
+	sqlDB.SetMaxOpenConns(25)
+	sqlDB.SetMaxIdleConns(5)
+	sqlDB.SetConnMaxLifetime(5 * time.Minute)
+	sqlDB.SetConnMaxIdleTime(2 * time.Minute)
+
+	if err := sqlDB.Ping(); err != nil {
+		return nil, fmt.Errorf("pinging mysql: %w", err)
+	}
+
+	return db, nil
+}

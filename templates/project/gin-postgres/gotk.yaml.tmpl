@@ -1,0 +1,27 @@
+version: 1
+
+project:
+  name: {{.ProjectName}}
+  module: {{.ModulePath}}
+
+stack:
+  framework: gin
+  database: postgres
+  orm: gorm
+  auth: {{.Auth}}
+
+paths:
+  handlers: internal/interfaces/http/handler
+  services: internal/application/usecase
+  repos: internal/infrastructure/repository
+  migrations: internal/infrastructure/database/migrations
+  entities: internal/domain/entity
+
+generate:
+  soft_delete: true
+  timestamps: true
+  swagger: false
+
+migrate:
+  driver: postgres
+  dsn: ${DATABASE_URL}

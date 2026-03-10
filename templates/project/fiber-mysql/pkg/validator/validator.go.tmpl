@@ -1,0 +1,26 @@
+// Package validator wraps go-playground/validator for use in Gin handlers.
+package validator
+
+import (
+	"sync"
+
+	"github.com/go-playground/validator/v10"
+)
+
+var (
+	once     sync.Once
+	validate *validator.Validate
+)
+
+// Get returns a singleton Validate instance.
+func Get() *validator.Validate {
+	once.Do(func() {
+		validate = validator.New()
+	})
+	return validate
+}
+
+// Struct validates a struct and returns a formatted error or nil.
+func Struct(s any) error {
+	return Get().Struct(s)
+}

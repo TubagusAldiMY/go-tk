@@ -1,0 +1,20 @@
+version: 1
+project:
+  name: {{.ProjectName}}
+  module: {{.ModulePath}}
+stack:
+  framework: fiber
+  database: mysql
+  orm: gorm
+  auth: {{if eq .Auth "jwt"}}jwt{{else}}none{{end}}
+paths:
+  handlers: internal/interfaces/http/handler
+  services: internal/application/usecase
+  repos: internal/infrastructure/repository
+  migrations: internal/infrastructure/database/migrations
+  entities: internal/domain/entity
+generate:
+  soft_delete: true
+  timestamps: true
+migrate:
+  driver: mysql

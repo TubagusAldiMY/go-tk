@@ -1,0 +1,64 @@
+// Package http wires together all Fiber routes and middleware.
+package http
+
+import (
+	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/cors"
+	"github.com/gofiber/fiber/v2/middleware/recover"
+	"github.com/gofiber/fiber/v2/middleware/requestid"
+	"gorm.io/gorm"
+	"strings"
+
+	"{{.ModulePath}}/internal/interfaces/http/middleware"
+	"{{.ModulePath}}/pkg/config"
+	"{{.ModulePath}}/pkg/logger"
+)
+
+// NewApp creates and configures the Fiber application with all middleware and routes.
+func NewApp(cfg *config.Config, log logger.Logger, db *gorm.DB) *fiber.App {
+	app := fiber.New(fiber.Config{
+		AppName:      cfg.AppName,
+		ErrorHandler: defaultErrorHandler,
+	})
+
+	// ── Global middleware ─────────────────────────────────────────────────────
+	app.Use(requestid.New())
+	app.Use(middleware.Logger(log))
+	app.Use(recover.New())
+	app.Use(cors.New(cors.Config{
+		AllowOrigins:     strings.Join(cfg.AllowOrigins, ","),
+		AllowMethods:     "GET,POST,PUT,PATCH,DELETE,OPTIONS",
+		AllowHeaders:     "Origin,Content-Type,Authorization,X-Request-ID",
+		ExposeHeaders:    "X-Request-ID",
+		AllowCredentials: true,
+	}))
+
+	// ── Health check ──────────────────────────────────────────────────────────
+	app.Get("/health", func(c *fiber.Ctx) error {
+		return c.JSON(fiber.Map{"status": "ok", "service": cfg.AppName})
+	})
+
+	// ── 404 handler ───────────────────────────────────────────────────────────
+	app.Use(func(c *fiber.Ctx) error {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
+			"success": false,
+			"error":   "route not found",
+		})
+	})
+
+	// ── API v1 ────────────────────────────────────────────────────────────────
+	// v1 := app.Group("/api/v1")
+	// Register your route groups here, e.g.:
+	// user.RegisterRoutes(v1, userHandler, cfg.JWTSecret)
+
+	return app
+}
+
+func defaultErrorHandler(c *fiber.Ctx, err error) error {
+	code := fiber.StatusInternalServerError
+	var e *fiber.Error
+	if ok := fiber.As(err, &e); ok {
+		code = e.Code
+	}
+	return c.Status(code).JSON(fiber.Map{"success": false, "error": err.Error()})
+}

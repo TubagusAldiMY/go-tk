@@ -1,0 +1,65 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"{{.ModulePath}}/internal/infrastructure/database"
+	httpserver "{{.ModulePath}}/internal/interfaces/http"
+	"{{.ModulePath}}/pkg/config"
+	"{{.ModulePath}}/pkg/logger"
+)
+
+func main() {
+	cfg := config.Load()
+
+	log := logger.New(cfg.AppEnv)
+	defer log.Sync() //nolint:errcheck
+
+	db, err := database.NewPostgres(cfg.DatabaseURL)
+	if err != nil {
+		log.Fatal("failed to connect to database", "error", err)
+	}
+
+	router := httpserver.NewRouter(cfg, log, db)
+
+	srv := &http.Server{
+		Addr:              fmt.Sprintf(":%s", cfg.Port),
+		Handler:           router,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+
+	// Start server in goroutine.
+	go func() {
+		log.Info("server starting", "addr", srv.Addr, "env", cfg.AppEnv)
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatal("server error", "error", err)
+		}
+	}()
+
+	// Block until OS signal received.
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+
+	log.Info("shutting down server...")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Error("forced shutdown", "error", err)
+		os.Exit(1)
+	}
+
+	log.Info("server stopped")
+}

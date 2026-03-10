@@ -1,0 +1,48 @@
+package main
+
+import (
+	"fmt"
+	"os"
+	"os/signal"
+	"syscall"
+
+	"{{.ModulePath}}/internal/infrastructure/database"
+	httpserver "{{.ModulePath}}/internal/interfaces/http"
+	"{{.ModulePath}}/pkg/config"
+	"{{.ModulePath}}/pkg/logger"
+)
+
+func main() {
+	cfg := config.Load()
+
+	log := logger.New(cfg.AppEnv)
+	defer log.Sync() //nolint:errcheck
+
+	db, err := database.NewPostgres(cfg.DatabaseURL)
+	if err != nil {
+		log.Fatal("failed to connect to database", "error", err)
+	}
+
+	app := httpserver.NewApp(cfg, log, db)
+
+	// Start server in goroutine.
+	go func() {
+		addr := fmt.Sprintf(":%s", cfg.Port)
+		log.Info("server starting", "addr", addr, "env", cfg.AppEnv)
+		if err := app.Listen(addr); err != nil {
+			log.Fatal("server error", "error", err)
+		}
+	}()
+
+	// Block until OS signal received.
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+
+	log.Info("shutting down server...")
+	if err := app.Shutdown(); err != nil {
+		log.Error("forced shutdown", "error", err)
+		os.Exit(1)
+	}
+	log.Info("server stopped")
+}

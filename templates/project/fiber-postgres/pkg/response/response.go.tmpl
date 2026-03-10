@@ -1,0 +1,75 @@
+// Package response provides standardized JSON response helpers for Fiber handlers.
+package response
+
+import (
+	"github.com/gofiber/fiber/v2"
+)
+
+// OK sends a 200 response with a data payload.
+func OK(c *fiber.Ctx, data any) error {
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{
+		"success": true,
+		"data":    data,
+	})
+}
+
+// Created sends a 201 response.
+func Created(c *fiber.Ctx, data any) error {
+	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
+		"success": true,
+		"data":    data,
+	})
+}
+
+// NoContent sends a 204 response.
+func NoContent(c *fiber.Ctx) error {
+	return c.SendStatus(fiber.StatusNoContent)
+}
+
+// BadRequest sends a 400 response with an error message.
+func BadRequest(c *fiber.Ctx, msg string) error {
+	return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+		"success": false,
+		"error":   msg,
+	})
+}
+
+// Unauthorized sends a 401 response.
+func Unauthorized(c *fiber.Ctx, msg string) error {
+	return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+		"success": false,
+		"error":   msg,
+	})
+}
+
+// Forbidden sends a 403 response.
+func Forbidden(c *fiber.Ctx, msg string) error {
+	return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+		"success": false,
+		"error":   msg,
+	})
+}
+
+// NotFound sends a 404 response.
+func NotFound(c *fiber.Ctx, msg string) error {
+	return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
+		"success": false,
+		"error":   msg,
+	})
+}
+
+// UnprocessableEntity sends a 422 response (validation errors).
+func UnprocessableEntity(c *fiber.Ctx, errors any) error {
+	return c.Status(fiber.StatusUnprocessableEntity).JSON(fiber.Map{
+		"success": false,
+		"errors":  errors,
+	})
+}
+
+// InternalServerError sends a 500 response.
+func InternalServerError(c *fiber.Ctx) error {
+	return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+		"success": false,
+		"error":   "internal server error",
+	})
+}

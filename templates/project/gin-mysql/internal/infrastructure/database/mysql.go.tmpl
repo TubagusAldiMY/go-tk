@@ -1,0 +1,42 @@
+// Package database provides the MySQL connection and health check.
+package database
+
+import (
+	"fmt"
+	"time"
+
+	"gorm.io/driver/mysql"
+	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
+)
+
+// NewMySQL opens a GORM connection to MySQL using the provided DSN.
+// It configures connection pool settings suitable for production use.
+func NewMySQL(dsn string) (*gorm.DB, error) {
+	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{
+		Logger:                 logger.Default.LogMode(logger.Silent),
+		PrepareStmt:            true, // cache prepared statements — security + perf
+		SkipDefaultTransaction: true, // disable per-query transaction overhead
+	})
+	if err != nil {
+		return nil, fmt.Errorf("connecting to mysql: %w", err)
+	}
+
+	sqlDB, err := db.DB()
+	if err != nil {
+		return nil, fmt.Errorf("getting underlying sql.DB: %w", err)
+	}
+
+	// Production-grade connection pool settings.
+	sqlDB.SetMaxOpenConns(25)
+	sqlDB.SetMaxIdleConns(5)
+	sqlDB.SetConnMaxLifetime(5 * time.Minute)
+	sqlDB.SetConnMaxIdleTime(2 * time.Minute)
+
+	// Verify connection at startup.
+	if err := sqlDB.Ping(); err != nil {
+		return nil, fmt.Errorf("pinging mysql: %w", err)
+	}
+
+	return db, nil
+}

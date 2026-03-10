@@ -1,0 +1,42 @@
+BINARY_NAME={{.ProjectName}}
+MODULE={{.ModulePath}}
+
+.PHONY: all build run test lint migrate-up migrate-down docker-up docker-down
+
+all: build
+
+build:
+	go build -o $(BINARY_NAME) ./cmd/api/
+
+run:
+	go run ./cmd/api/
+
+test:
+	go test -v -race ./...
+
+lint:
+	golangci-lint run ./...
+
+tidy:
+	go mod tidy
+
+migrate-up:
+	go-tk migrate up
+
+migrate-down:
+	go-tk migrate down
+
+migrate-status:
+	go-tk migrate status
+
+docker-up:
+	docker compose up -d
+
+docker-down:
+	docker compose down
+
+docker-logs:
+	docker compose logs -f app
+
+clean:
+	rm -f $(BINARY_NAME)

@@ -1,0 +1,56 @@
+// Package http wires together all Gin routes and middleware.
+package http
+
+import (
+	"net/http"
+
+	"github.com/gin-contrib/cors"
+	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
+
+	"{{.ModulePath}}/internal/interfaces/http/middleware"
+	"{{.ModulePath}}/pkg/config"
+	"{{.ModulePath}}/pkg/logger"
+	"{{.ModulePath}}/pkg/response"
+)
+
+// NewRouter creates and configures the Gin engine with all middleware and routes.
+func NewRouter(cfg *config.Config, log logger.Logger, db *gorm.DB) *gin.Engine {
+	if cfg.AppEnv == "production" {
+		gin.SetMode(gin.ReleaseMode)
+	}
+
+	r := gin.New()
+
+	// ── Global middleware ─────────────────────────────────────────────────────
+	r.Use(middleware.RequestID())
+	r.Use(middleware.Logger(log))
+	r.Use(gin.Recovery())
+	r.Use(cors.New(cors.Config{
+		AllowOrigins:     cfg.AllowOrigins,
+		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
+		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization", "X-Request-ID"},
+		ExposeHeaders:    []string{"X-Request-ID"},
+		AllowCredentials: true,
+	}))
+
+	// ── Health check ──────────────────────────────────────────────────────────
+	r.GET("/health", func(c *gin.Context) {
+		response.OK(c, gin.H{"status": "ok", "service": cfg.AppName})
+	})
+
+	// ── 404 / 405 handlers ────────────────────────────────────────────────────
+	r.NoRoute(func(c *gin.Context) {
+		response.NotFound(c, "route not found")
+	})
+	r.NoMethod(func(c *gin.Context) {
+		c.JSON(http.StatusMethodNotAllowed, gin.H{"success": false, "error": "method not allowed"})
+	})
+
+	// ── API v1 ────────────────────────────────────────────────────────────────
+	// v1 := r.Group("/api/v1")
+	// Register your route groups here, e.g.:
+	// user.RegisterRoutes(v1, userHandler, cfg.JWTSecret)
+
+	return r
+}

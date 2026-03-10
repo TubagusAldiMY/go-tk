@@ -1,0 +1,51 @@
+// Package config loads application configuration from environment variables.
+// Follows 12-Factor App principles: all config from env.
+package config
+
+import (
+	"os"
+	"strings"
+)
+
+// Config holds all application configuration.
+type Config struct {
+	AppName     string
+	AppEnv      string // development | staging | production
+	Port        string
+	DatabaseURL string
+	JWTSecret   string
+	JWTExpiry   string // e.g. "24h"
+	LogLevel    string // debug | info | warn | error
+	AllowOrigins []string
+}
+
+// Load reads config from environment variables with sensible defaults.
+func Load() *Config {
+	return &Config{
+		AppName:      getEnv("APP_NAME", "{{.ProjectName}}"),
+		AppEnv:       getEnv("APP_ENV", "development"),
+		Port:         getEnv("PORT", "8080"),
+		DatabaseURL:  mustEnv("DATABASE_URL"),
+		JWTSecret:    mustEnv("JWT_SECRET"),
+		JWTExpiry:    getEnv("JWT_EXPIRY", "24h"),
+		LogLevel:     getEnv("LOG_LEVEL", "info"),
+		AllowOrigins: strings.Split(getEnv("ALLOW_ORIGINS", "*"), ","),
+	}
+}
+
+func getEnv(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
+
+// mustEnv returns the env var or panics with a clear message.
+// Panics are intentional at startup: a missing required config is a fatal error.
+func mustEnv(key string) string {
+	v := os.Getenv(key)
+	if v == "" {
+		panic("required environment variable not set: " + key)
+	}
+	return v
+}

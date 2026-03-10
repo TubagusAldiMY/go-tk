@@ -1,0 +1,39 @@
+package middleware
+
+import (
+	"time"
+
+	"github.com/gin-gonic/gin"
+
+	"{{.ModulePath}}/pkg/logger"
+)
+
+// Logger returns a Gin middleware that logs each request with structured fields.
+func Logger(log logger.Logger) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		start := time.Now()
+		path := c.Request.URL.Path
+
+		c.Next()
+
+		latency := time.Since(start)
+		status := c.Writer.Status()
+		reqID, _ := c.Get("request_id")
+
+		logFn := log.Info
+		if status >= 500 {
+			logFn = log.Error
+		} else if status >= 400 {
+			logFn = log.Warn
+		}
+
+		logFn("http request",
+			"method", c.Request.Method,
+			"path", path,
+			"status", status,
+			"latency_ms", latency.Milliseconds(),
+			"ip", c.ClientIP(),
+			"request_id", reqID,
+		)
+	}
+}

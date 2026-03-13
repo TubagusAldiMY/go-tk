@@ -1,3 +1,34 @@
+// Package crud implements the "go-tk gen crud" command.
+//
+// This package generates a complete CRUD implementation following Clean Architecture:
+//   Layer 1 (Domain):         entity, repository interface
+//   Layer 2 (Application):    use case (business logic)
+//   Layer 3 (Infrastructure): repository implementation (GORM)
+//   Layer 4 (Delivery):       HTTP handler (Gin or Fiber), DTO
+//   Database:                 migrations (up/down) for PostgreSQL or MySQL
+//
+// Total files generated: 8 per entity
+//   1. internal/domain/entity/{entity}.go
+//   2. internal/domain/repository/{entity}_repository.go (interface)
+//   3. internal/infrastructure/repository/{entity}_repo.go (GORM impl)
+//   4. internal/application/usecase/{entity}_usecase.go
+//   5. internal/interfaces/http/handler/{entity}_handler.go (Gin or Fiber)
+//   6. internal/interfaces/dto/{entity}_dto.go
+//   7. migrations/{timestamp}_create_{entities}.up.sql (Postgres or MySQL)
+//   8. migrations/{timestamp}_create_{entities}.down.sql
+//
+// Architecture Decisions:
+//   - Dual handler templates (Gin vs Fiber) — selected via gotk.yaml stack.framework
+//   - Dual migration templates (Postgres vs MySQL) — selected via gotk.yaml stack.database
+//   - Timestamps are idempotent within same second (clock-based, not counter-based)
+//   - Soft delete is opt-in via gotk.yaml generate.soft_delete
+//
+// Idempotency:
+//   - Files are skipped if they exist (unless --force)
+//   - Running same command twice is safe (no duplicates, no corruption)
+//   - Migration timestamps are deterministic (same second → same filename)
+//
+// Thread safety: Not concurrent-safe (creates files in sequence).
 package crud
 
 import (
@@ -13,31 +44,71 @@ import (
 )
 
 // TemplatesFS must be injected by the cmd layer (go:embed).
+// This is set in cmd/go-tk/main.go via crudcmd.TemplatesFS = gotktmpl.FS.
+// Do NOT initialize here — embedding must happen at main package level.
 var TemplatesFS embed.FS
 
 // CRUDData is the template data for all CRUD file templates.
+//
+// Naming conventions:
+//   EntityName   — PascalCase (User, ProductCategory)
+//   EntityNameLC — camelCase (user, productCategory) — for variable names
+//   EntityNamePL — lowercase plural (users, productcategories) — for package names
+//   TableName    — snake_case plural (users, product_categories) — for SQL
+//
+// This struct is passed to all 8 templates and must contain ALL data needed.
+// Do NOT add conditional logic in templates — add fields here and branch in Go.
 type CRUDData struct {
-	ModulePath   string
-	EntityName   string // PascalCase: "Product"
-	EntityNameLC string // lowercase:  "product"
-	EntityNamePL string // plural:     "products"
-	TableName    string // snake plural: "products"
-	Fields       []FieldDef
-	SoftDelete   bool
-	Timestamps   bool
-	MigrationVer string // timestamp: "20260309120000"
-	GeneratedAt  string // human date: "2026-03-09"
-	Framework    string // "gin" | "fiber"
-	Database     string // "postgres" | "mysql"
+	ModulePath   string     // Go module path (e.g. github.com/user/myapp)
+	EntityName   string     // PascalCase: "Product"
+	EntityNameLC string     // camelCase:  "product"
+	EntityNamePL string     // plural:     "products"
+	TableName    string     // snake_case plural: "products"
+	Fields       []FieldDef // Entity fields with type, DB type, validation
+	SoftDelete   bool       // Whether to include deleted_at column
+	Timestamps   bool       // Whether to include created_at/updated_at
+	MigrationVer string     // Timestamp: "20260309120000"
+	GeneratedAt  string     // Human date: "2026-03-09"
+	Framework    string     // "gin" | "fiber" (selects handler template)
+	Database     string     // "postgres" | "mysql" (selects migration template + field types)
 }
 
 // GeneratedFile tracks a file that was (or would be) generated.
+// Used for --dry-run preview and logging.
 type GeneratedFile struct {
-	TemplateName string
-	OutputPath   string
+	TemplateName string // Template path (e.g. "crud/entity.go.tmpl")
+	OutputPath   string // Target file path (e.g. "internal/domain/entity/product.go")
 }
 
 // Generate produces all CRUD files for the given entity.
+//
+// Workflow:
+//   1. Build CRUDData from inputs (entity name, config, fields)
+//   2. Select templates based on stack (Gin/Fiber × Postgres/MySQL)
+//   3. For each template:
+//      a. Check if output file exists (skip if not --force)
+//      b. Render template with CRUDData
+//      c. Format Go files (gofmt + goimports)
+//      d. Write atomically to disk
+//   4. Print next steps (route registration, dependency wiring)
+//
+// Parameters:
+//   entityName — Entity name in any case (will be normalized to PascalCase)
+//   cfg        — Project config from gotk.yaml (paths, stack, options)
+//   fields     — Field definitions (from CLI flags or interactive prompt)
+//   force      — Overwrite existing files (default: skip existing)
+//   dryRun     — Print what would be generated without writing files
+//
+// Error handling:
+//   - Template render error → fail immediately (don't write partial files)
+//   - File write error → fail immediately (atomic write prevents corruption)
+//   - Formatting error → log warning, continue (generated code may need manual fmt)
+//
+// Idempotency:
+//   Running this function twice with same inputs:
+//     force=false  → second run skips all files (no changes)
+//     force=true   → second run overwrites all files (identical output)
+//     dryRun=true  → never writes files (safe to run multiple times)
 func Generate(entityName string, cfg *config.Config, fields []FieldDef, force, dryRun bool) error {
 	now := time.Now()
 	data := CRUDData{

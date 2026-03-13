@@ -1,6 +1,9 @@
 package middleware
 
 import (
+	"sync"
+	"time"
+
 	jwtware "github.com/gofiber/contrib/jwt"
 	"github.com/golang-jwt/jwt/v5"
 
@@ -14,11 +17,63 @@ type Claims struct {
 	jwt.RegisteredClaims
 }
 
+// ── Account Lockout ───────────────────────────────────────────────────────────
+
+const (
+	maxFailedAttempts = 5
+	lockoutDuration   = 15 * time.Minute
+)
+
+type lockEntry struct {
+	failures int
+	lockedAt time.Time
+	locked   bool
+}
+
+var lockStore sync.Map // identifier (email/IP) → *lockEntry
+
+// RecordFailedAttempt increments the failure counter for the given identifier.
+// After maxFailedAttempts the account is locked for lockoutDuration.
+func RecordFailedAttempt(identifier string) {
+	actual, _ := lockStore.LoadOrStore(identifier, &lockEntry{})
+	entry := actual.(*lockEntry)
+	entry.failures++
+	if entry.failures >= maxFailedAttempts {
+		entry.locked = true
+		entry.lockedAt = time.Now()
+	}
+}
+
+// ResetFailedAttempts clears the lockout state for an identifier (call on successful login).
+func ResetFailedAttempts(identifier string) {
+	lockStore.Delete(identifier)
+}
+
+// IsLocked returns true if the identifier is currently locked out.
+func IsLocked(identifier string) bool {
+	val, ok := lockStore.Load(identifier)
+	if !ok {
+		return false
+	}
+	entry := val.(*lockEntry)
+	if !entry.locked {
+		return false
+	}
+	// Auto-expire lockout after lockoutDuration.
+	if time.Since(entry.lockedAt) >= lockoutDuration {
+		lockStore.Delete(identifier)
+		return false
+	}
+	return true
+}
+
+// ── JWT Middleware ────────────────────────────────────────────────────────────
+
 // JWTAuth validates the Bearer token in the Authorization header.
 // On success it sets "user_id" and "role" in the Fiber locals.
 func JWTAuth(secret string) fiber.Handler {
 	return jwtware.New(jwtware.Config{
-		SigningKey:  jwtware.SigningKey{Key: []byte(secret)},
+		SigningKey:   jwtware.SigningKey{Key: []byte(secret)},
 		TokenLookup: "header:Authorization",
 		AuthScheme:  "Bearer",
 		Claims:      &Claims{},

@@ -1,0 +1,77 @@
+package middleware
+
+import (
+	"net/http"
+	"sync"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"golang.org/x/time/rate"
+)
+
+// ipLimiter holds a rate limiter and its last-seen time for cleanup purposes.
+type ipLimiter struct {
+	limiter  *rate.Limiter
+	lastSeen time.Time
+}
+
+var (
+	limiters   = sync.Map{} // IP → *ipLimiter
+	cleanupMu  sync.Mutex
+	lastCleanup = time.Now()
+)
+
+const (
+	// authRateLimit is the maximum number of requests per minute for auth endpoints.
+	authRateLimit = 10
+	// cleanupInterval determines how often idle limiter entries are evicted.
+	cleanupInterval = 5 * time.Minute
+	// limiterIdleTimeout is how long an IP must be idle before its limiter is removed.
+	limiterIdleTimeout = 10 * time.Minute
+)
+
+// getIPLimiter returns the rate.Limiter for the given IP, creating one if necessary.
+func getIPLimiter(ip string) *rate.Limiter {
+	// Periodic cleanup of idle entries to prevent unbounded memory growth.
+	cleanupMu.Lock()
+	if time.Since(lastCleanup) > cleanupInterval {
+		lastCleanup = time.Now()
+		cleanupMu.Unlock()
+		limiters.Range(func(key, val any) bool {
+			if il, ok := val.(*ipLimiter); ok {
+				if time.Since(il.lastSeen) > limiterIdleTimeout {
+					limiters.Delete(key)
+				}
+			}
+			return true
+		})
+	} else {
+		cleanupMu.Unlock()
+	}
+
+	actual, _ := limiters.LoadOrStore(ip, &ipLimiter{
+		// Allow authRateLimit tokens per minute, burst = authRateLimit.
+		limiter:  rate.NewLimiter(rate.Every(time.Minute/time.Duration(authRateLimit)), authRateLimit),
+		lastSeen: time.Now(),
+	})
+	il := actual.(*ipLimiter)
+	il.lastSeen = time.Now()
+	return il.limiter
+}
+
+// AuthRateLimit returns a Gin middleware that enforces 10 requests/minute per IP.
+// Intended for auth endpoints (login, register, password-reset).
+func AuthRateLimit() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ip := c.ClientIP()
+		limiter := getIPLimiter(ip)
+		if !limiter.Allow() {
+			c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{
+				"success": false,
+				"error":   "too many requests — please wait before trying again",
+			})
+			return
+		}
+		c.Next()
+	}
+}

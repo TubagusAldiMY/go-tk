@@ -1,4 +1,40 @@
 // Package analyze implements the "go-tk analyze" command.
+//
+// This package performs static analysis on Go backend projects to detect:
+//   1. Code quality issues (unhandled errors, missing validation)
+//   2. Performance problems (N+1 queries)
+//   3. Security vulnerabilities (hardcoded credentials, missing auth)
+//   4. Architecture violations (circular imports, dead routes)
+//
+// Analysis Strategy:
+//   All checks use AST parsing (go/ast) and file system traversal — NO CODE EXECUTION.
+//   This means analysis is safe to run on untrusted code and works on broken projects.
+//
+// Health Score Algorithm:
+//   Base score: 100
+//   Per issue: -penalty based on severity
+//     CRITICAL → -10 points
+//     HIGH     → -5 points
+//     MEDIUM   → -2 points
+//     LOW      → -1 point
+//   Floor: 0 (cannot go negative)
+//
+// Grade Scale:
+//   90-100 → A (Excellent)
+//   75-89  → B (Good)
+//   60-74  → C (Fair)
+//   40-59  → D (Poor)
+//   0-39   → F (Critical)
+//
+// Output Modes:
+//   - Text (default): Human-readable colored output with progress bars
+//   - JSON (TODO #5): Machine-readable for CI pipelines
+//   - HTML (TODO #5): Web report with charts and filtering
+//
+// CI Integration:
+//   Use --fail-under to enforce minimum health score:
+//     go-tk analyze --fail-under=75
+//   Exit code 0 if score >= threshold, 1 otherwise.
 package analyze
 
 import (

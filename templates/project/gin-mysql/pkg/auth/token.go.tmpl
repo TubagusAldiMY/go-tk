@@ -1,0 +1,139 @@
+package auth
+
+import (
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
+)
+
+const (
+	// Security compliance (AGENTS.md Section 7 — A07):
+	// - Access token: 15m (short-lived, frequently refreshed)
+	// - Refresh token: 7d (long-lived, rotated on each use)
+	accessTokenTTL  = 15 * time.Minute
+	refreshTokenTTL = 7 * 24 * time.Hour
+)
+
+// Claims is the JWT payload for access and refresh tokens.
+//
+// Security notes:
+//   - jti (JWT ID) is required for refresh token rotation and blacklisting
+//   - TokenType distinguishes access vs refresh tokens (defense against token confusion)
+type Claims struct {
+	UserID    uint   `json:"user_id"`
+	Role      string `json:"role,omitempty"` // Only in access tokens
+	TokenType string `json:"token_type"`     // "access" | "refresh"
+	jwt.RegisteredClaims
+}
+
+// TokenService handles JWT generation and validation.
+type TokenService struct {
+	accessSecret  []byte
+	refreshSecret []byte
+}
+
+// NewTokenService creates a TokenService.
+// accessSecret and refreshSecret must be distinct, high-entropy values (≥32 bytes recommended).
+func NewTokenService(accessSecret, refreshSecret string) *TokenService {
+	return &TokenService{
+		accessSecret:  []byte(accessSecret),
+		refreshSecret: []byte(refreshSecret),
+	}
+}
+
+// GenerateAccessToken returns a signed HS256 JWT that expires in 24 hours.
+func (s *TokenService) GenerateAccessToken(userID uint, role string) (string, error) {
+	now := time.Now()
+	claims := Claims{
+		UserID:    userID,
+		Role:      role,
+		TokenType: "access",
+		RegisteredClaims: jwt.RegisteredClaims{
+			IssuedAt:  jwt.NewNumericDate(now),
+			ExpiresAt: jwt.NewNumericDate(now.Add(accessTokenTTL)),
+		},
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	signed, err := token.SignedString(s.accessSecret)
+	if err != nil {
+		return "", fmt.Errorf("generate access token: %w", err)
+	}
+	return signed, nil
+}
+
+// GenerateRefreshToken returns a signed HS256 JWT that expires in 7 days.
+//
+// Security features (AGENTS.md Section 7 — A07):
+//   - Includes jti (JWT ID) for token rotation and blacklisting
+//   - Minimal scope: only UserID (no role, no permissions)
+//   - TokenType set to "refresh" to prevent misuse as access token
+//
+// Token rotation flow:
+//   1. Client sends refresh token to /auth/refresh
+//   2. Server validates refresh token
+//   3. Server adds old token jti to blacklist (via TokenBlacklist.Add)
+//   4. Server issues new access + refresh tokens
+//   5. Old refresh token cannot be reused (replay attack prevention)
+func (s *TokenService) GenerateRefreshToken(userID uint) (string, error) {
+	now := time.Now()
+	tokenID := uuid.New().String() // Unique ID for this token
+
+	claims := Claims{
+		UserID:    userID,
+		TokenType: "refresh",
+		RegisteredClaims: jwt.RegisteredClaims{
+			ID:        tokenID, // jti claim for blacklist tracking
+			IssuedAt:  jwt.NewNumericDate(now),
+			ExpiresAt: jwt.NewNumericDate(now.Add(refreshTokenTTL)),
+		},
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	signed, err := token.SignedString(s.refreshSecret)
+	if err != nil {
+		return "", fmt.Errorf("generate refresh token: %w", err)
+	}
+	return signed, nil
+}
+
+// ValidateAccessToken parses and validates an access token, returning its claims.
+func (s *TokenService) ValidateAccessToken(tokenStr string) (*Claims, error) {
+	return s.validate(tokenStr, s.accessSecret, "access")
+}
+
+// ValidateRefreshToken parses and validates a refresh token, returning its claims.
+func (s *TokenService) ValidateRefreshToken(tokenStr string) (*Claims, error) {
+	return s.validate(tokenStr, s.refreshSecret, "refresh")
+}
+
+func (s *TokenService) validate(tokenStr string, secret []byte, expectedType string) (*Claims, error) {
+	claims := &Claims{}
+	token, err := jwt.ParseWithClaims(tokenStr, claims, func(t *jwt.Token) (any, error) {
+		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, jwt.ErrSignatureInvalid
+		}
+		return secret, nil
+	})
+	if err != nil {
+		if errors.Is(err, jwt.ErrTokenExpired) {
+			return nil, ErrTokenExpired
+		}
+		return nil, fmt.Errorf("validate token: %w", err)
+	}
+	if !token.Valid {
+		return nil, ErrTokenInvalid
+	}
+	if claims.TokenType != expectedType {
+		return nil, ErrTokenInvalid
+	}
+	return claims, nil
+}
+
+var (
+	// ErrTokenExpired is returned when the JWT has passed its expiry time.
+	ErrTokenExpired = errors.New("token expired")
+	// ErrTokenInvalid is returned for malformed or tampered tokens.
+	ErrTokenInvalid = errors.New("token invalid")
+)

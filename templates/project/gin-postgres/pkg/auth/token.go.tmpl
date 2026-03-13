@@ -6,18 +6,26 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 )
 
 const (
-	accessTokenTTL  = 24 * time.Hour
+	// Security compliance (AGENTS.md Section 7 — A07):
+	// - Access token: 15m (short-lived, frequently refreshed)
+	// - Refresh token: 7d (long-lived, rotated on each use)
+	accessTokenTTL  = 15 * time.Minute
 	refreshTokenTTL = 7 * 24 * time.Hour
 )
 
-// Claims is the JWT payload for access tokens.
+// Claims is the JWT payload for access and refresh tokens.
+//
+// Security notes:
+//   - jti (JWT ID) is required for refresh token rotation and blacklisting
+//   - TokenType distinguishes access vs refresh tokens (defense against token confusion)
 type Claims struct {
 	UserID    uint   `json:"user_id"`
-	Role      string `json:"role"`
-	TokenType string `json:"token_type"` // "access" | "refresh"
+	Role      string `json:"role,omitempty"` // Only in access tokens
+	TokenType string `json:"token_type"`     // "access" | "refresh"
 	jwt.RegisteredClaims
 }
 
@@ -57,13 +65,27 @@ func (s *TokenService) GenerateAccessToken(userID uint, role string) (string, er
 }
 
 // GenerateRefreshToken returns a signed HS256 JWT that expires in 7 days.
-// Refresh tokens carry only UserID (minimal scope).
+//
+// Security features (AGENTS.md Section 7 — A07):
+//   - Includes jti (JWT ID) for token rotation and blacklisting
+//   - Minimal scope: only UserID (no role, no permissions)
+//   - TokenType set to "refresh" to prevent misuse as access token
+//
+// Token rotation flow:
+//   1. Client sends refresh token to /auth/refresh
+//   2. Server validates refresh token
+//   3. Server adds old token jti to blacklist (via TokenBlacklist.Add)
+//   4. Server issues new access + refresh tokens
+//   5. Old refresh token cannot be reused (replay attack prevention)
 func (s *TokenService) GenerateRefreshToken(userID uint) (string, error) {
 	now := time.Now()
+	tokenID := uuid.New().String() // Unique ID for this token
+
 	claims := Claims{
 		UserID:    userID,
 		TokenType: "refresh",
 		RegisteredClaims: jwt.RegisteredClaims{
+			ID:        tokenID, // jti claim for blacklist tracking
 			IssuedAt:  jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(now.Add(refreshTokenTTL)),
 		},

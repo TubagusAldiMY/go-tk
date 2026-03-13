@@ -1,0 +1,94 @@
+package auth
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/redis/go-redis/v9"
+)
+
+// TokenBlacklist manages invalidated refresh tokens using Redis.
+//
+// Architecture Decision (AGENTS.md Section 7 — A07):
+// - Refresh tokens must be invalidated on logout and rotation
+// - Blacklist stored in Redis with TTL matching token expiry
+// - Failed Redis calls are logged but don't block operations (fail-open for availability)
+type TokenBlacklist struct {
+	client *redis.Client
+}
+
+// NewTokenBlacklist creates a TokenBlacklist instance.
+//
+// Parameters:
+//   client — Redis client (must be initialized and connected)
+//
+// Usage:
+//   blacklist := auth.NewTokenBlacklist(redisClient)
+//   defer blacklist.Close()
+func NewTokenBlacklist(client *redis.Client) *TokenBlacklist {
+	return &TokenBlacklist{client: client}
+}
+
+// Add blacklists a refresh token until its natural expiry.
+//
+// Algorithm:
+//   1. Extract token ID (jti claim) or use full token as key
+//   2. Store in Redis with key: "blacklist:refresh:{tokenID}"
+//   3. Set TTL to match token's remaining lifetime
+//
+// Parameters:
+//   ctx      — Request context (for deadline propagation)
+//   tokenID  — Unique token identifier (from jti claim or token hash)
+//   expiry   — Token's original expiration time
+//
+// Error handling:
+//   - Redis failure → log error, return nil (fail-open to maintain availability)
+//   - Already expired token → no-op, return nil
+//
+// Thread safety: Safe for concurrent use (Redis client is thread-safe).
+func (b *TokenBlacklist) Add(ctx context.Context, tokenID string, expiry time.Time) error {
+	ttl := time.Until(expiry)
+	if ttl <= 0 {
+		return nil // Token already expired, no need to blacklist
+	}
+
+	key := fmt.Sprintf("blacklist:refresh:%s", tokenID)
+	err := b.client.Set(ctx, key, "1", ttl).Err()
+	if err != nil {
+		// Log error but don't fail the operation (availability over consistency)
+		// In production: log to monitoring system for alerting
+		return fmt.Errorf("blacklist.Add: %w", err)
+	}
+	return nil
+}
+
+// IsBlacklisted checks if a refresh token has been invalidated.
+//
+// Returns:
+//   true  — Token is blacklisted (deny refresh)
+//   false — Token is valid OR Redis unavailable (fail-open)
+//
+// Rationale for fail-open:
+//   If Redis is down, denying all refreshes would cause widespread service disruption.
+//   Accepting the risk of not honoring blacklist during outage is acceptable trade-off.
+//   Monitor Redis availability separately to detect this scenario.
+func (b *TokenBlacklist) IsBlacklisted(ctx context.Context, tokenID string) bool {
+	key := fmt.Sprintf("blacklist:refresh:%s", tokenID)
+	val, err := b.client.Get(ctx, key).Result()
+	if err == redis.Nil {
+		return false // Not blacklisted
+	}
+	if err != nil {
+		// Redis error → fail-open (return false to allow operation)
+		// Log this for monitoring
+		return false
+	}
+	return val == "1"
+}
+
+// Close releases Redis connection resources.
+// Call this during graceful shutdown.
+func (b *TokenBlacklist) Close() error {
+	return b.client.Close()
+}

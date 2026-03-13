@@ -11,11 +11,12 @@
 // subdirectory of a generated project (similar to git's .git discovery).
 //
 // Example project structure:
-//   /project-root/
-//     gotk.yaml              ← Found by Load() from any subdir
-//     internal/
-//       domain/
-//       infrastructure/
+//
+//	/project-root/
+//	  gotk.yaml              ← Found by Load() from any subdir
+//	  internal/
+//	    domain/
+//	    infrastructure/
 //
 // If gotk.yaml is not found, commands that require it (gen, migrate, test, analyze)
 // will fail with ErrConfigNotFound, prompting the user to run "go-tk new" first.
@@ -42,20 +43,21 @@ var ErrConfigNotFound = errors.New("gotk.yaml not found; run 'go-tk new' to crea
 // filesystem root. Returns the parsed Config on success.
 //
 // Discovery algorithm:
-//   1. Start at startDir (typically os.Getwd())
-//   2. Check if gotk.yaml exists in current directory
-//   3. If not found, move to parent directory
-//   4. Repeat until found or filesystem root reached
-//   5. Return ErrConfigNotFound if not found
+//  1. Start at startDir (typically os.Getwd())
+//  2. Check if gotk.yaml exists in current directory
+//  3. If not found, move to parent directory
+//  4. Repeat until found or filesystem root reached
+//  5. Return ErrConfigNotFound if not found
 //
 // This allows go-tk commands to be run from ANY subdirectory of a project,
 // similar to how git commands work from any subdir of a repo.
 //
 // Example:
-//   cfg, err := config.Load(cwd)
-//   if err != nil {
-//       return fmt.Errorf("not in a go-tk project: %w", err)
-//   }
+//
+//	cfg, err := config.Load(cwd)
+//	if err != nil {
+//	    return fmt.Errorf("not in a go-tk project: %w", err)
+//	}
 //
 // Error cases:
 //   - gotk.yaml not found → ErrConfigNotFound
@@ -107,13 +109,14 @@ func loadFromExactPath(path string) (*Config, error) {
 // findConfigDir walks from startDir up to the root looking for ConfigFileName.
 //
 // Algorithm:
-//   current = abs(startDir)
-//   loop:
-//     if gotk.yaml exists in current → return current
-//     parent = dirname(current)
-//     if parent == current → reached root, break
-//     current = parent
-//   return ErrConfigNotFound
+//
+//	current = abs(startDir)
+//	loop:
+//	  if gotk.yaml exists in current → return current
+//	  parent = dirname(current)
+//	  if parent == current → reached root, break
+//	  current = parent
+//	return ErrConfigNotFound
 //
 // This is the "git-style" discovery pattern used by many dev tools.
 func findConfigDir(startDir string) (string, error) {

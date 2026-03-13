@@ -59,16 +59,18 @@ func main() {
 // buildRootCmd constructs the root Cobra command with all subcommands attached.
 //
 // Command hierarchy:
-//   go-tk new [name]                  — Scaffold new project (interactive or flags)
-//   go-tk gen crud <Entity>           — Generate full CRUD (entity, repo, usecase, handler, DTO, migrations)
-//   go-tk migrate [up|down|status|...]— Database migration management
-//   go-tk env [validate|sync|...]     — Environment variable validation
-//   go-tk test                        — Auto-generate and run HTTP tests
-//   go-tk analyze                     — Static analysis (7 checks: errors, N+1, auth, etc.)
+//
+//	go-tk new [name]                  — Scaffold new project (interactive or flags)
+//	go-tk gen crud <Entity>           — Generate full CRUD (entity, repo, usecase, handler, DTO, migrations)
+//	go-tk migrate [up|down|status|...]— Database migration management
+//	go-tk env [validate|sync|...]     — Environment variable validation
+//	go-tk test                        — Auto-generate and run HTTP tests
+//	go-tk analyze                     — Static analysis (7 checks: errors, N+1, auth, etc.)
 //
 // Version information (from ldflags):
-//   Build: make build injects Version, Commit, Date via ldflags
-//   Example: go build -ldflags "-X .../build.Version=v1.0.0"
+//
+//	Build: make build injects Version, Commit, Date via ldflags
+//	Example: go build -ldflags "-X .../build.Version=v1.0.0"
 //
 // Silence flags prevent duplicate error output — we handle errors explicitly in main().
 func buildRootCmd() *cobra.Command {
@@ -81,8 +83,8 @@ It eliminates the friction of starting and maintaining Go backend projects
 by providing opinionated code generation, migration management, and analysis.
 
 Learn more: https://github.com/TubagusAldiMY/go-tk`,
-		SilenceUsage:  true,  // Don't print usage on error (only on --help)
-		SilenceErrors: true,  // We print errors manually in main()
+		SilenceUsage:  true, // Don't print usage on error (only on --help)
+		SilenceErrors: true, // We print errors manually in main()
 	}
 
 	// Version template uses values injected at build time via ldflags.

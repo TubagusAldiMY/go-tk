@@ -6,8 +6,9 @@
 //   - "go-tk analyze" to detect dead routes and orphaned handlers
 //
 // Supported patterns:
-//   Gin:   router.GET("/path", handler.Method)
-//   Fiber: app.Post("/path", handler.Method)
+//
+//	Gin:   router.GET("/path", handler.Method)
+//	Fiber: app.Post("/path", handler.Method)
 //
 // Limitations:
 //   - Only detects direct route registrations (not route groups with closures)
@@ -29,12 +30,14 @@ import (
 // Route holds an extracted HTTP route registration.
 //
 // Example Gin route:
-//   router.GET("/api/v1/users/:id", userHandler.GetByID)
-//   → {Method: "GET", Path: "/api/v1/users/:id", Handler: "userHandler.GetByID"}
+//
+//	router.GET("/api/v1/users/:id", userHandler.GetByID)
+//	→ {Method: "GET", Path: "/api/v1/users/:id", Handler: "userHandler.GetByID"}
 //
 // Example Fiber route:
-//   app.Post("/api/v1/products", productHandler.Create)
-//   → {Method: "POST", Path: "/api/v1/products", Handler: "productHandler.Create"}
+//
+//	app.Post("/api/v1/products", productHandler.Create)
+//	→ {Method: "POST", Path: "/api/v1/products", Handler: "productHandler.Create"}
 type Route struct {
 	Method  string // HTTP method: GET, POST, PUT, DELETE, PATCH
 	Path    string // Route path (may include params: /users/:id)
@@ -57,12 +60,12 @@ var knownHTTPMethods = map[string]string{
 // registrations of the form receiver.METHOD("path", handler).
 //
 // Algorithm:
-//   1. Parse file to AST
-//   2. Walk all nodes looking for CallExpr (function calls)
-//   3. Check if call is a SelectorExpr (receiver.Method)
-//   4. Check if method name is in knownHTTPMethods (GET, POST, etc.)
-//   5. Extract first arg as path (string literal)
-//   6. Extract last arg as handler (function reference)
+//  1. Parse file to AST
+//  2. Walk all nodes looking for CallExpr (function calls)
+//  3. Check if call is a SelectorExpr (receiver.Method)
+//  4. Check if method name is in knownHTTPMethods (GET, POST, etc.)
+//  5. Extract first arg as path (string literal)
+//  6. Extract last arg as handler (function reference)
 //
 // Graceful degradation:
 //   - If a route call doesn't match expected pattern, skip it
@@ -72,10 +75,11 @@ var knownHTTPMethods = map[string]string{
 // This is best-effort — unusual patterns may be missed, but we never crash.
 //
 // Example routes detected:
-//   router.GET("/users", handler.List)        → ✅
-//   app.Post("/products/:id", h.Update)       → ✅
-//   r.PUT(pathVar, handler)                   → ❌ skipped (path not literal)
-//   group.GET("/admin", middleware, handler)  → ⚠️ detected (middleware ignored)
+//
+//	router.GET("/users", handler.List)        → ✅
+//	app.Post("/products/:id", h.Update)       → ✅
+//	r.PUT(pathVar, handler)                   → ❌ skipped (path not literal)
+//	group.GET("/admin", middleware, handler)  → ⚠️ detected (middleware ignored)
 //
 // Returns: All successfully parsed routes, or empty slice if file unparseable.
 func ParseRoutesFromFile(filePath string) ([]Route, error) {
@@ -136,9 +140,10 @@ func ParseRoutesFromFile(filePath string) ([]Route, error) {
 // handlerExprToString converts a handler expression to a string identifier.
 //
 // Handles:
-//   handler.Create      → "handler.Create" (receiver.Method)
-//   CreateUser          → "CreateUser" (function name)
-//   pkg.Handler.Method  → "pkg.Handler.Method" (fully qualified)
+//
+//	handler.Create      → "handler.Create" (receiver.Method)
+//	CreateUser          → "CreateUser" (function name)
+//	pkg.Handler.Method  → "pkg.Handler.Method" (fully qualified)
 //
 // Returns "<unknown>" for complex expressions (e.g. inline closures, method values).
 //
@@ -160,7 +165,8 @@ func handlerExprToString(expr ast.Expr) string {
 // exprToString recursively converts an expression to a dotted identifier.
 //
 // Used by handlerExprToString to handle nested selectors:
-//   pkg.Type.Method → "pkg.Type.Method"
+//
+//	pkg.Type.Method → "pkg.Type.Method"
 func exprToString(expr ast.Expr) string {
 	switch e := expr.(type) {
 	case *ast.Ident:

@@ -3,7 +3,7 @@ MODULE=github.com/TubagusAldiMY/go-tk
 VERSION?=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS=-ldflags "-X $(MODULE)/cmd/go-tk/build.Version=$(VERSION) -X $(MODULE)/cmd/go-tk/build.Commit=$(shell git rev-parse --short HEAD 2>/dev/null || echo unknown) -X $(MODULE)/cmd/go-tk/build.Date=$(shell date -u +%Y-%m-%dT%H:%M:%SZ)"
 
-.PHONY: all build test lint clean install fmt vet
+.PHONY: all build test lint clean install fmt vet check coverage snapshot release tidy
 
 all: build
 
@@ -46,5 +46,16 @@ release:
 
 tidy:
 	go mod tidy
+
+# Pre-commit check (AGENTS.md Section 8.4 & 14.9)
+# Run this before every commit — fail fast if any check fails
+check: fmt vet test
+	@echo ""
+	@echo "✅ All pre-commit checks passed!"
+	@echo "   - Code formatting: OK"
+	@echo "   - Go vet: OK"  
+	@echo "   - Tests (with race detector): OK"
+	@echo ""
+	@echo "Ready to commit. Use: git add -A && git commit"
 
 .DEFAULT_GOAL := build

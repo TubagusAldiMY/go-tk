@@ -23,18 +23,19 @@ import (
 // to ensure atomicity. Creates parent directories as needed.
 //
 // Algorithm:
-//   1. Create parent directories (os.MkdirAll)
-//   2. Create temp file in same directory as target (same filesystem = atomic rename)
-//   3. Write content to temp file
-//   4. Set permissions on temp file
-//   5. Close temp file
-//   6. Rename temp → target (atomic operation on POSIX)
-//   7. Cleanup temp file if any step fails
+//  1. Create parent directories (os.MkdirAll)
+//  2. Create temp file in same directory as target (same filesystem = atomic rename)
+//  3. Write content to temp file
+//  4. Set permissions on temp file
+//  5. Close temp file
+//  6. Rename temp → target (atomic operation on POSIX)
+//  7. Cleanup temp file if any step fails
 //
 // Parameters:
-//   path    — Target file path (absolute or relative)
-//   content — File content as bytes
-//   perm    — Unix permissions (e.g. 0o644 for rw-r--r--)
+//
+//	path    — Target file path (absolute or relative)
+//	content — File content as bytes
+//	perm    — Unix permissions (e.g. 0o644 for rw-r--r--)
 //
 // Safety guarantees:
 //   - Readers never see partial content
@@ -42,8 +43,9 @@ import (
 //   - If disk is full, temp file is cleaned up (no orphaned files)
 //
 // Example:
-//   content := []byte("package main\n\nfunc main() {}\n")
-//   err := WriteAtomic("cmd/server/main.go", content, 0o644)
+//
+//	content := []byte("package main\n\nfunc main() {}\n")
+//	err := WriteAtomic("cmd/server/main.go", content, 0o644)
 //
 // Thread-safety: Safe for concurrent writes to DIFFERENT files.
 // Writes to the SAME file are serialized by the filesystem (last write wins).

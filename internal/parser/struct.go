@@ -7,9 +7,9 @@
 //
 // Architecture Decision:
 // We use go/ast (stdlib) instead of reflection because:
-//   1. Static analysis — no need to compile target project
-//   2. Works on broken code (useful during development)
-//   3. Zero runtime overhead (parse at tool invocation, not in generated app)
+//  1. Static analysis — no need to compile target project
+//  2. Works on broken code (useful during development)
+//  3. Zero runtime overhead (parse at tool invocation, not in generated app)
 //
 // Thread safety: All functions are stateless and safe for concurrent use.
 //
@@ -31,8 +31,8 @@ import (
 // Used by CRUD generator to infer field types from existing entities
 // (future feature: "go-tk gen crud User --from-entity").
 type ParsedStruct struct {
-	Name   string         // Struct name (e.g. "User")
-	Fields []ParsedField  // All fields in declaration order
+	Name   string        // Struct name (e.g. "User")
+	Fields []ParsedField // All fields in declaration order
 }
 
 // ParsedField holds information about a single struct field.
@@ -51,10 +51,10 @@ type ParsedField struct {
 // Returns ErrStructNotFound if the struct does not exist in the file.
 //
 // Algorithm:
-//   1. Parse file to AST (fails on syntax errors)
-//   2. Walk all top-level declarations
-//   3. Find type declaration matching structName
-//   4. Extract fields with their types, tags, and comments
+//  1. Parse file to AST (fails on syntax errors)
+//  2. Walk all top-level declarations
+//  3. Find type declaration matching structName
+//  4. Extract fields with their types, tags, and comments
 //
 // Limitations:
 //   - Only parses top-level struct declarations (not embedded in functions)
@@ -62,13 +62,15 @@ type ParsedField struct {
 //   - Complex types (chan, func) are represented as "interface{}"
 //
 // Use case:
-//   Infer CRUD fields from existing entity definition rather than CLI flags.
+//
+//	Infer CRUD fields from existing entity definition rather than CLI flags.
 //
 // Example:
-//   parsed, err := ParseStructFromFile("internal/domain/entity/user.go", "User")
-//   for _, field := range parsed.Fields {
-//       fmt.Printf("%s %s `%s`\n", field.Name, field.Type, field.Tags["json"])
-//   }
+//
+//	parsed, err := ParseStructFromFile("internal/domain/entity/user.go", "User")
+//	for _, field := range parsed.Fields {
+//	    fmt.Printf("%s %s `%s`\n", field.Name, field.Type, field.Tags["json"])
+//	}
 func ParseStructFromFile(filePath, structName string) (*ParsedStruct, error) {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, filePath, nil, parser.ParseComments)
@@ -125,11 +127,12 @@ func ParseStructFromFile(filePath, structName string) (*ParsedStruct, error) {
 // typeToString converts an ast.Expr to a type string representation.
 //
 // Handles common type expressions:
-//   *ast.Ident        → "string", "int", "MyType"
-//   *ast.SelectorExpr → "time.Time", "uuid.UUID"
-//   *ast.StarExpr     → "*User", "*int"
-//   *ast.ArrayType    → "[]string", "[...]int"
-//   *ast.MapType      → "map[string]int"
+//
+//	*ast.Ident        → "string", "int", "MyType"
+//	*ast.SelectorExpr → "time.Time", "uuid.UUID"
+//	*ast.StarExpr     → "*User", "*int"
+//	*ast.ArrayType    → "[]string", "[...]int"
+//	*ast.MapType      → "map[string]int"
 //
 // Fallback for unsupported types (chan, func, struct literal) → "interface{}"
 //
@@ -179,7 +182,7 @@ func parseTags(lit *ast.BasicLit) map[string]string {
 
 	// Raw tag string is backtick-delimited: `json:"..." db:"..."`
 	raw := strings.Trim(lit.Value, "`")
-	
+
 	// Split by whitespace (tags are space-separated)
 	for _, part := range strings.Fields(raw) {
 		// Each part: key:"value"

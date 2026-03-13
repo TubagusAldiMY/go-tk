@@ -19,6 +19,7 @@ func CrudCmd() *cobra.Command {
 		flagTimestamps bool
 		flagDryRun     bool
 		flagForce      bool
+		flagSkip       bool
 	)
 
 	cmd := &cobra.Command{
@@ -35,18 +36,28 @@ Each run creates up to 7 files:
   • internal/interfaces/dto/<entity>_dto.go
   • internal/infrastructure/database/migrations/<ts>_create_<table>.sql
 
+Flags:
+  --skip    Only generate files that don't exist (skip existing)
+  --force   Overwrite all existing files
+
 Examples:
   go-tk gen crud Product
   go-tk gen crud Product --fields='name:string,price:float64,stock:int,active:bool'
-  go-tk gen crud Order --fields='total:float64,status:string?' --dry-run`,
+  go-tk gen crud Order --fields='total:float64,status:string?' --dry-run
+  go-tk gen crud User --skip    # Only create missing files`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Validate mutually exclusive flags
+			if flagForce && flagSkip {
+				return fmt.Errorf("--force and --skip are mutually exclusive")
+			}
 			return runCrud(args[0], &crudFlags{
 				fields:     flagFields,
 				softDelete: flagSoftDelete,
 				timestamps: flagTimestamps,
 				dryRun:     flagDryRun,
 				force:      flagForce,
+				skip:       flagSkip,
 			})
 		},
 	}
@@ -56,6 +67,7 @@ Examples:
 	cmd.Flags().BoolVar(&flagTimestamps, "timestamps", true, "Add created_at/updated_at columns")
 	cmd.Flags().BoolVar(&flagDryRun, "dry-run", false, "Preview files that would be created without writing")
 	cmd.Flags().BoolVar(&flagForce, "force", false, "Overwrite existing files")
+	cmd.Flags().BoolVar(&flagSkip, "skip", false, "Only generate files that don't exist (skip existing)")
 
 	return cmd
 }
@@ -66,6 +78,7 @@ type crudFlags struct {
 	timestamps bool
 	dryRun     bool
 	force      bool
+	skip       bool
 }
 
 func runCrud(entityName string, flags *crudFlags) error {
@@ -100,5 +113,5 @@ func runCrud(entityName string, flags *crudFlags) error {
 		fmt.Println()
 	}
 
-	return Generate(entityName, cfg, fields, flags.force, flags.dryRun)
+	return Generate(entityName, cfg, fields, flags.force, flags.skip, flags.dryRun)
 }

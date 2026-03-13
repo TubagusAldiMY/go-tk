@@ -42,9 +42,11 @@
 package analyze
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -54,10 +56,54 @@ import (
 	"github.com/TubagusAldiMY/go-tk/internal/ui"
 )
 
+// JSONOutput is the machine-readable output format for CI integration.
+// Follows the standard response envelope pattern from AGENTS.md Section 5.4.
+type JSONOutput struct {
+	Success bool            `json:"success"`
+	Data    *JSONOutputData `json:"data"`
+	Meta    *JSONOutputMeta `json:"meta"`
+}
+
+// JSONOutputData contains the analysis results.
+type JSONOutputData struct {
+	HealthScore int           `json:"health_score"`
+	Grade       string        `json:"grade"`
+	Issues      []JSONIssue   `json:"issues"`
+	Summary     IssueSummary  `json:"summary"`
+}
+
+// JSONIssue is a single issue in JSON format.
+type JSONIssue struct {
+	Kind     string `json:"kind"`
+	Severity string `json:"severity"`
+	File     string `json:"file"`
+	Line     int    `json:"line,omitempty"`
+	Message  string `json:"message"`
+}
+
+// IssueSummary contains counts by severity.
+type IssueSummary struct {
+	Critical int `json:"critical"`
+	High     int `json:"high"`
+	Medium   int `json:"medium"`
+	Low      int `json:"low"`
+	Info     int `json:"info"`
+	Total    int `json:"total"`
+}
+
+// JSONOutputMeta contains metadata about the analysis run.
+type JSONOutputMeta struct {
+	FilesScanned int       `json:"files_scanned"`
+	Timestamp    time.Time `json:"timestamp"`
+	ProjectName  string    `json:"project_name"`
+	FailUnder    int       `json:"fail_under,omitempty"`
+}
+
 // AnalyzeCmd returns the cobra.Command for "go-tk analyze".
 func AnalyzeCmd() *cobra.Command {
 	var minSeverity string
 	var failUnder int
+	var outputFormat string
 
 	cmd := &cobra.Command{
 		Use:   "analyze",
@@ -76,30 +122,44 @@ Checks performed:
 Outputs a health score (0–100) and a graded report.
 
 Use --fail-under in CI pipelines to enforce a minimum health score:
-  go-tk analyze --fail-under=75`,
+  go-tk analyze --fail-under=75
+
+Use --output=json for machine-readable output (CI integration):
+  go-tk analyze --output=json`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runAnalyze(minSeverity, failUnder)
+			return runAnalyze(minSeverity, failUnder, outputFormat)
 		},
 	}
 
 	cmd.Flags().StringVar(&minSeverity, "min-severity", "low", "Minimum severity to report (critical|high|medium|low|info)")
 	cmd.Flags().IntVar(&failUnder, "fail-under", 0, "Exit with code 1 if health score is below this threshold (0 = disabled)")
+	cmd.Flags().StringVarP(&outputFormat, "output", "o", "text", "Output format: text | json")
 
 	return cmd
 }
 
-func runAnalyze(minSeverityStr string, failUnder int) error {
-	fmt.Println()
-	fmt.Println(ui.Banner())
-	fmt.Println()
+func runAnalyze(minSeverityStr string, failUnder int, outputFormat string) error {
+	// Validate output format
+	if outputFormat != "text" && outputFormat != "json" {
+		return fmt.Errorf("invalid output format: %s (valid: text, json)", outputFormat)
+	}
 
 	cwd, _ := os.Getwd()
 	cfg, err := config.Load(cwd)
 	if err != nil {
+		if outputFormat == "json" {
+			return outputJSONError("config not found: run 'go-tk new' first")
+		}
 		return config.ErrConfigNotFound
 	}
 
-	ui.PrintSection("Analyzing project: " + cfg.Project.Name)
+	// Skip banner for JSON output
+	if outputFormat != "json" {
+		fmt.Println()
+		fmt.Println(ui.Banner())
+		fmt.Println()
+		ui.PrintSection("Analyzing project: " + cfg.Project.Name)
+	}
 
 	result := &types.AnalysisResult{}
 
@@ -135,7 +195,12 @@ func runAnalyze(minSeverityStr string, failUnder int) error {
 	// Compute health score
 	result.HealthScore = types.ComputeHealthScore(result.Issues)
 
-	// Print report
+	// Output based on format
+	if outputFormat == "json" {
+		return outputJSON(result, cfg.Project.Name, failUnder)
+	}
+
+	// Print text report
 	printReport(result, parseSeverity(minSeverityStr))
 
 	// Enforce minimum health score for CI pipelines.
@@ -144,6 +209,79 @@ func runAnalyze(minSeverityStr string, failUnder int) error {
 	}
 
 	return nil
+}
+
+// outputJSON outputs the analysis result in JSON format for CI integration.
+func outputJSON(result *types.AnalysisResult, projectName string, failUnder int) error {
+	// Convert issues to JSON format
+	jsonIssues := make([]JSONIssue, len(result.Issues))
+	summary := IssueSummary{Total: len(result.Issues)}
+
+	for i, issue := range result.Issues {
+		jsonIssues[i] = JSONIssue{
+			Kind:     string(issue.Kind),
+			Severity: issue.Severity.String(),
+			File:     issue.File,
+			Line:     issue.Line,
+			Message:  issue.Message,
+		}
+		// Count by severity
+		switch issue.Severity {
+		case types.SeverityCritical:
+			summary.Critical++
+		case types.SeverityHigh:
+			summary.High++
+		case types.SeverityMedium:
+			summary.Medium++
+		case types.SeverityLow:
+			summary.Low++
+		case types.SeverityInfo:
+			summary.Info++
+		}
+	}
+
+	output := JSONOutput{
+		Success: result.HealthScore >= failUnder || failUnder == 0,
+		Data: &JSONOutputData{
+			HealthScore: result.HealthScore,
+			Grade:       types.ScoreGrade(result.HealthScore),
+			Issues:      jsonIssues,
+			Summary:     summary,
+		},
+		Meta: &JSONOutputMeta{
+			FilesScanned: result.FilesScanned,
+			Timestamp:    time.Now().UTC(),
+			ProjectName:  projectName,
+			FailUnder:    failUnder,
+		},
+	}
+
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(output); err != nil {
+		return fmt.Errorf("encoding JSON: %w", err)
+	}
+
+	// Return error if below threshold (for CI exit code)
+	if failUnder > 0 && result.HealthScore < failUnder {
+		return fmt.Errorf("health score %d is below minimum threshold %d", result.HealthScore, failUnder)
+	}
+
+	return nil
+}
+
+// outputJSONError outputs an error in JSON format.
+func outputJSONError(message string) error {
+	output := map[string]interface{}{
+		"success": false,
+		"error": map[string]string{
+			"message": message,
+		},
+	}
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetIndent("", "  ")
+	_ = encoder.Encode(output)
+	return fmt.Errorf("%s", message)
 }
 
 func runCheck(result *types.AnalysisResult, name string, fn func() ([]types.Issue, int, error)) {

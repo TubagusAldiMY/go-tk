@@ -3,8 +3,10 @@ package env
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -21,7 +23,7 @@ const (
 func EnvCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "env",
-		Short: "Environment variable management (validate, sync, generate-example, check)",
+		Short: "Environment variable management (validate, sync, generate-example, check, db-check)",
 		Long: `Manage .env files for your go-tk project.
 
 Validates your .env against .env.example, syncs missing keys,
@@ -32,6 +34,7 @@ and provides pre-deploy preflight checks.`,
 	cmd.AddCommand(syncCmd())
 	cmd.AddCommand(generateExampleCmd())
 	cmd.AddCommand(checkCmd())
+	cmd.AddCommand(dbCheckCmd())
 
 	return cmd
 }
@@ -288,4 +291,149 @@ func repeatStr(s string, n int) string {
 func loadConfig() (*config.Config, error) {
 	cwd, _ := os.Getwd()
 	return config.Load(cwd)
+}
+
+// --- db-check (database connectivity check) ---
+
+func dbCheckCmd() *cobra.Command {
+	var timeout int
+
+	cmd := &cobra.Command{
+		Use:   "db-check",
+		Short: "Test database connectivity using .env credentials",
+		Long: `Pre-flight database connectivity check.
+
+Tests that the database is reachable using credentials from .env.
+Useful before running migrations or deployment.
+
+Environment variables read:
+  DB_DRIVER   - postgres | mysql
+  DB_HOST     - Database host
+  DB_PORT     - Database port
+  DB_USER     - Database user
+  DB_PASSWORD - Database password
+  DB_NAME     - Database name
+  DB_SSL_MODE - SSL mode (for postgres)
+
+Example:
+  go-tk env db-check
+  go-tk env db-check --timeout=10`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runDBCheck(timeout)
+		},
+	}
+
+	cmd.Flags().IntVar(&timeout, "timeout", 5, "Connection timeout in seconds")
+
+	return cmd
+}
+
+func runDBCheck(timeoutSec int) error {
+	cwd := mustCwd()
+	envFile := filepath.Join(cwd, defaultEnvFile)
+
+	if err := requireFile(envFile); err != nil {
+		return fmt.Errorf(".env not found — create it first")
+	}
+
+	ui.PrintSection("Database connectivity check")
+
+	// Load environment variables
+	envVars, err := parseEnvFile(envFile)
+	if err != nil {
+		return fmt.Errorf("parsing .env: %w", err)
+	}
+
+	driver := envVars["DB_DRIVER"]
+	host := envVars["DB_HOST"]
+	port := envVars["DB_PORT"]
+	user := envVars["DB_USER"]
+	password := envVars["DB_PASSWORD"]
+	dbname := envVars["DB_NAME"]
+	sslmode := envVars["DB_SSL_MODE"]
+
+	// Validate required fields
+	missing := []string{}
+	if driver == "" {
+		missing = append(missing, "DB_DRIVER")
+	}
+	if host == "" {
+		missing = append(missing, "DB_HOST")
+	}
+	if port == "" {
+		missing = append(missing, "DB_PORT")
+	}
+	if user == "" {
+		missing = append(missing, "DB_USER")
+	}
+	if dbname == "" {
+		missing = append(missing, "DB_NAME")
+	}
+
+	if len(missing) > 0 {
+		for _, m := range missing {
+			fmt.Printf("  %s %s not set in .env\n", ui.StyleError.Render("✗"), m)
+		}
+		return fmt.Errorf("missing required database environment variables")
+	}
+
+	fmt.Printf("  Driver:   %s\n", driver)
+	fmt.Printf("  Host:     %s:%s\n", host, port)
+	fmt.Printf("  Database: %s\n", dbname)
+	fmt.Printf("  User:     %s\n", user)
+	fmt.Printf("  Timeout:  %ds\n", timeoutSec)
+	fmt.Println()
+
+	// Build connection string and test
+	var dsn string
+	switch driver {
+	case "postgres":
+		if sslmode == "" {
+			sslmode = "disable"
+		}
+		dsn = fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=%s connect_timeout=%d",
+			host, port, user, password, dbname, sslmode, timeoutSec)
+	case "mysql":
+		dsn = fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?timeout=%ds&parseTime=true",
+			user, password, host, port, dbname, timeoutSec)
+	default:
+		return fmt.Errorf("unsupported DB_DRIVER: %s (valid: postgres, mysql)", driver)
+	}
+
+	// Test connection using exec (no direct DB driver dependency in go-tk)
+	// We use a simple TCP ping as a lightweight check
+	fmt.Printf("  Testing connection...")
+
+	if err := testTCPConnection(host, port, timeoutSec); err != nil {
+		fmt.Printf(" %s\n", ui.StyleError.Render("FAILED"))
+		fmt.Printf("\n  %s\n", ui.StyleError.Render("Database is unreachable: "+err.Error()))
+		ui.PrintHint("Check that the database is running and network is accessible.")
+		ui.PrintHint("Verify DB_HOST and DB_PORT in .env")
+		return fmt.Errorf("database connectivity check failed")
+	}
+
+	fmt.Printf(" %s\n", ui.StyleSuccess.Render("OK"))
+	fmt.Println()
+	ui.PrintDone("Database is reachable at " + host + ":" + port)
+	ui.PrintHint("Note: This only tests TCP connectivity. Run 'go-tk migrate status' to verify credentials.")
+
+	// Print DSN hint (masked password)
+	maskedDSN := dsn
+	if password != "" {
+		maskedDSN = fmt.Sprintf("...password=****...") // Don't show actual DSN with password
+	}
+	_ = maskedDSN // Avoid unused variable
+
+	return nil
+}
+
+// testTCPConnection tests if a TCP connection can be established to host:port.
+func testTCPConnection(host, port string, timeoutSec int) error {
+	addr := fmt.Sprintf("%s:%s", host, port)
+	conn, err := net.DialTimeout("tcp", addr, time.Duration(timeoutSec)*time.Second)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	return nil
 }

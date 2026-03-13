@@ -35,6 +35,7 @@ package crud
 import (
 	"embed"
 	"fmt"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -88,7 +89,7 @@ type GeneratedFile struct {
 //  1. Build CRUDData from inputs (entity name, config, fields)
 //  2. Select templates based on stack (Gin/Fiber × Postgres/MySQL)
 //  3. For each template:
-//     a. Check if output file exists (skip if not --force)
+//     a. Check if output file exists (skip if --skip, overwrite if --force)
 //     b. Render template with CRUDData
 //     c. Format Go files (gofmt + goimports)
 //     d. Write atomically to disk
@@ -99,7 +100,8 @@ type GeneratedFile struct {
 //	entityName — Entity name in any case (will be normalized to PascalCase)
 //	cfg        — Project config from gotk.yaml (paths, stack, options)
 //	fields     — Field definitions (from CLI flags or interactive prompt)
-//	force      — Overwrite existing files (default: skip existing)
+//	force      — Overwrite existing files
+//	skip       — Only generate files that don't exist (--skip flag)
 //	dryRun     — Print what would be generated without writing files
 //
 // Error handling:
@@ -110,10 +112,10 @@ type GeneratedFile struct {
 // Idempotency:
 //
 //	Running this function twice with same inputs:
-//	  force=false  → second run skips all files (no changes)
-//	  force=true   → second run overwrites all files (identical output)
-//	  dryRun=true  → never writes files (safe to run multiple times)
-func Generate(entityName string, cfg *config.Config, fields []FieldDef, force, dryRun bool) error {
+//	  skip=true   → second run skips all files (only create missing)
+//	  force=true  → second run overwrites all files
+//	  dryRun=true → never writes files (safe to run multiple times)
+func Generate(entityName string, cfg *config.Config, fields []FieldDef, force, skip, dryRun bool) error {
 	now := time.Now()
 	data := CRUDData{
 		ModulePath:   cfg.Project.Module,
@@ -154,9 +156,20 @@ func Generate(entityName string, cfg *config.Config, fields []FieldDef, force, d
 	ui.PrintSection("Generating CRUD: " + data.EntityName)
 
 	for _, f := range files {
-		if generator.FileExists(f.OutputPath) && !force {
-			ui.PrintFileSkipped(f.OutputPath)
-			continue
+		// Handle file existence based on --force and --skip flags
+		fileExists := generator.FileExists(f.OutputPath)
+		if fileExists {
+			if skip {
+				// --skip: explicitly skip existing files
+				ui.PrintFileSkipped(f.OutputPath)
+				continue
+			}
+			if !force {
+				// Default behavior (no --force, no --skip): skip with warning
+				ui.PrintFileSkipped(f.OutputPath)
+				continue
+			}
+			// --force: fall through to overwrite
 		}
 
 		rendered, err := engine.Render(f.TemplateName, data)
@@ -180,7 +193,28 @@ func Generate(entityName string, cfg *config.Config, fields []FieldDef, force, d
 		}
 	}
 
+	// Post-generation validation: run go build to verify generated code compiles
+	if err := runPostGenerationValidation(); err != nil {
+		fmt.Printf("  %s Post-generation validation failed: %s\n", ui.StyleWarning.Render("!"), err.Error())
+		ui.PrintHint("Generated files may need manual fixes. Run 'go build ./...' to see errors.")
+	}
+
 	printCRUDNextSteps(data.EntityName, data.EntityNameLC, data.EntityNamePL)
+	return nil
+}
+
+// runPostGenerationValidation runs 'go build' to verify generated code compiles.
+func runPostGenerationValidation() error {
+	ui.PrintSection("Validating generated code")
+
+	// Run go build to check if generated code compiles
+	cmd := exec.Command("go", "build", "./...")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("go build failed: %s", string(output))
+	}
+
+	fmt.Println("  ✓ Generated code compiles successfully")
 	return nil
 }
 

@@ -21,6 +21,11 @@ import (
 	"github.com/TubagusAldiMY/go-tk/internal/ui"
 )
 
+const (
+	extUpSQL   = ".up.sql"
+	extDownSQL = ".down.sql"
+)
+
 // Runner executes database migrations for a go-tk project.
 type Runner struct {
 	cfg           *config.Config
@@ -115,8 +120,8 @@ func (r *Runner) Create(name string) error {
 		safeName, time.Now().Format("2006-01-02 15:04:05"))
 
 	for _, pair := range []struct{ path, content string }{
-		{base + ".up.sql", upContent},
-		{base + ".down.sql", downContent},
+		{base + extUpSQL, upContent},
+		{base + extDownSQL, downContent},
 	} {
 		if err := os.WriteFile(pair.path, []byte(pair.content), 0o644); err != nil {
 			return fmt.Errorf("writing %s: %w", pair.path, err)
@@ -146,10 +151,10 @@ func (r *Runner) Validate() error {
 		}
 		n := e.Name()
 		switch {
-		case strings.HasSuffix(n, ".up.sql"):
-			ups[strings.TrimSuffix(n, ".up.sql")] = true
-		case strings.HasSuffix(n, ".down.sql"):
-			downs[strings.TrimSuffix(n, ".down.sql")] = true
+		case strings.HasSuffix(n, extUpSQL):
+			ups[strings.TrimSuffix(n, extUpSQL)] = true
+		case strings.HasSuffix(n, extDownSQL):
+			downs[strings.TrimSuffix(n, extDownSQL)] = true
 		}
 	}
 

@@ -32,6 +32,37 @@ func CheckUnhandledErrors(dir string) ([]types.Issue, int, error) {
 	return issues, scanned, err
 }
 
+// checkAssignForUnhandledErrors inspects a single assignment statement and returns
+// issues for any discarded error return values.
+func checkAssignForUnhandledErrors(assign *ast.AssignStmt, fset *token.FileSet, relPath string) []types.Issue {
+	var issues []types.Issue
+	for _, lhs := range assign.Lhs {
+		ident, ok := lhs.(*ast.Ident)
+		if !ok || ident.Name != "_" {
+			continue
+		}
+
+		// Check if RHS is a function call returning an error
+		for _, rhs := range assign.Rhs {
+			call, ok := rhs.(*ast.CallExpr)
+			if !ok {
+				continue
+			}
+			if funcName := callFuncName(call); isErrorReturningFunc(funcName) {
+				pos := fset.Position(assign.Pos())
+				issues = append(issues, types.Issue{
+					Kind:     types.KindUnhandledError,
+					Severity: types.SeverityMedium,
+					File:     relPath,
+					Line:     pos.Line,
+					Message:  "error return value discarded from " + funcName + "()",
+				})
+			}
+		}
+	}
+	return issues
+}
+
 func checkFileForUnhandledErrors(filePath string) []types.Issue {
 	src, err := os.ReadFile(filePath)
 	if err != nil {
@@ -47,39 +78,13 @@ func checkFileForUnhandledErrors(filePath string) []types.Issue {
 	relPath := shortenPath(filePath)
 	var issues []types.Issue
 
+	// Look for patterns like: _ = someFunc() or _, err = ...; _ = err
 	ast.Inspect(f, func(n ast.Node) bool {
 		assign, ok := n.(*ast.AssignStmt)
 		if !ok {
 			return true
 		}
-
-		// Look for patterns like: _ = someFunc() or _, err = ...; _ = err
-		for _, lhs := range assign.Lhs {
-			ident, ok := lhs.(*ast.Ident)
-			if !ok || ident.Name != "_" {
-				continue
-			}
-
-			// Check if RHS is a function call returning an error
-			for _, rhs := range assign.Rhs {
-				call, ok := rhs.(*ast.CallExpr)
-				if !ok {
-					continue
-				}
-				// Heuristic: if the function name ends in a verb (Close, Remove, Write...)
-				// and we're discarding the result, flag it.
-				if funcName := callFuncName(call); isErrorReturningFunc(funcName) {
-					pos := fset.Position(assign.Pos())
-					issues = append(issues, types.Issue{
-						Kind:     types.KindUnhandledError,
-						Severity: types.SeverityMedium,
-						File:     relPath,
-						Line:     pos.Line,
-						Message:  "error return value discarded from " + funcName + "()",
-					})
-				}
-			}
-		}
+		issues = append(issues, checkAssignForUnhandledErrors(assign, fset, relPath)...)
 		return true
 	})
 

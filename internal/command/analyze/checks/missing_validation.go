@@ -29,6 +29,41 @@ func CheckMissingValidation(handlersDir string) ([]types.Issue, int, error) {
 	return issues, scanned, err
 }
 
+// checkFuncForMissingValidation inspects a single function and returns an issue if it
+// binds JSON without validating, nil otherwise.
+func checkFuncForMissingValidation(fn *ast.FuncDecl, fset *token.FileSet, relPath string) *types.Issue {
+	hasBind := false
+	hasValidate := false
+
+	ast.Inspect(fn.Body, func(inner ast.Node) bool {
+		call, ok := inner.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		name := selectorName(call)
+		if strings.Contains(name, "ShouldBindJSON") || strings.Contains(name, "BindJSON") {
+			hasBind = true
+		}
+		if strings.Contains(name, "Struct") || strings.Contains(name, "Validate") {
+			hasValidate = true
+		}
+		return true
+	})
+
+	if !hasBind || hasValidate {
+		return nil
+	}
+	pos := fset.Position(fn.Pos())
+	issue := types.Issue{
+		Kind:     types.KindMissingValidation,
+		Severity: types.SeverityHigh,
+		File:     relPath,
+		Line:     pos.Line,
+		Message:  "handler " + fn.Name.Name + "() binds JSON but does not validate input",
+	}
+	return &issue
+}
+
 func checkHandlerValidation(filePath string) []types.Issue {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, filePath, nil, 0)
@@ -44,34 +79,8 @@ func checkHandlerValidation(filePath string) []types.Issue {
 		if !ok || fn.Body == nil {
 			return true
 		}
-
-		hasBind := false
-		hasValidate := false
-
-		ast.Inspect(fn.Body, func(inner ast.Node) bool {
-			call, ok := inner.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
-			name := selectorName(call)
-			if strings.Contains(name, "ShouldBindJSON") || strings.Contains(name, "BindJSON") {
-				hasBind = true
-			}
-			if strings.Contains(name, "Struct") || strings.Contains(name, "Validate") {
-				hasValidate = true
-			}
-			return true
-		})
-
-		if hasBind && !hasValidate {
-			pos := fset.Position(fn.Pos())
-			issues = append(issues, types.Issue{
-				Kind:     types.KindMissingValidation,
-				Severity: types.SeverityHigh,
-				File:     relPath,
-				Line:     pos.Line,
-				Message:  "handler " + fn.Name.Name + "() binds JSON but does not validate input",
-			})
+		if issue := checkFuncForMissingValidation(fn, fset, relPath); issue != nil {
+			issues = append(issues, *issue)
 		}
 		return true
 	})

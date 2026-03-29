@@ -9,6 +9,8 @@ import (
 	"github.com/TubagusAldiMY/go-tk/internal/parser"
 )
 
+const routerFileName = "router.go"
+
 // RouteInfo extends parser.Route with display helpers.
 type RouteInfo struct {
 	Method  string
@@ -21,9 +23,9 @@ type RouteInfo struct {
 // It searches for common router filenames in the interfaces/http directory.
 func DiscoverRoutes(projectRoot string) ([]RouteInfo, error) {
 	candidates := []string{
-		filepath.Join(projectRoot, "internal", "interfaces", "http", "router.go"),
-		filepath.Join(projectRoot, "internal", "router", "router.go"),
-		filepath.Join(projectRoot, "router.go"),
+		filepath.Join(projectRoot, "internal", "interfaces", "http", routerFileName),
+		filepath.Join(projectRoot, "internal", "router", routerFileName),
+		filepath.Join(projectRoot, routerFileName),
 	}
 
 	var routerFile string

@@ -61,6 +61,21 @@ func CheckCircularImports(projectDir string) ([]types.Issue, int, error) {
 	return issues, scanned, nil
 }
 
+// recordCycleIssue reconstructs and records a cycle issue if it has not been reported yet.
+func recordCycleIssue(parent map[string]string, reported map[string]bool, issues *[]types.Issue, dep, pkg string) {
+	cycle := reconstructCycle(parent, dep, pkg)
+	key := cycleKey(cycle)
+	if !reported[key] {
+		reported[key] = true
+		*issues = append(*issues, types.Issue{
+			Kind:     types.KindCircularImport,
+			Severity: types.SeverityCritical,
+			File:     dep,
+			Message:  fmt.Sprintf("import cycle detected: %s", strings.Join(cycle, " → ")),
+		})
+	}
+}
+
 // detectCycles runs DFS over the import graph and returns one Issue per unique cycle.
 func detectCycles(graph map[string][]string) []types.Issue {
 	type color int
@@ -93,17 +108,7 @@ func detectCycles(graph map[string][]string) []types.Issue {
 				dfs(dep)
 			case gray:
 				// Back-edge → cycle found; reconstruct path.
-				cycle := reconstructCycle(parent, dep, pkg)
-				key := cycleKey(cycle)
-				if !reported[key] {
-					reported[key] = true
-					issues = append(issues, types.Issue{
-						Kind:     types.KindCircularImport,
-						Severity: types.SeverityCritical,
-						File:     dep,
-						Message:  fmt.Sprintf("import cycle detected: %s", strings.Join(cycle, " → ")),
-					})
-				}
+				recordCycleIssue(parent, reported, &issues, dep, pkg)
 			}
 		}
 
@@ -199,31 +204,13 @@ func parseInternalImports(filePath, modulePath string) []string {
 	}
 	defer f.Close() //nolint:errcheck
 
+	prefix := modulePath + "/"
 	var imports []string
 	inImport := false
-	prefix := modulePath + "/"
-
-	addIfInternal := func(line string) {
-		// Extract the quoted import path from a line that may have an alias.
-		// e.g. `_ "github.com/foo/bar"` or `foo "github.com/foo/bar"` or `"github.com/foo/bar"`
-		start := strings.Index(line, `"`)
-		if start < 0 {
-			return
-		}
-		end := strings.LastIndex(line, `"`)
-		if end <= start {
-			return
-		}
-		imp := line[start+1 : end]
-		if strings.HasPrefix(imp, prefix) {
-			imports = append(imports, imp)
-		}
-	}
 
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
-
 		if line == "import (" {
 			inImport = true
 			continue
@@ -232,18 +219,33 @@ func parseInternalImports(filePath, modulePath string) []string {
 			inImport = false
 			continue
 		}
-
-		// Single-line import (with or without alias): import ["alias"] "path"
 		if strings.HasPrefix(line, "import ") {
-			addIfInternal(line)
+			imports = addInternalImport(line, prefix, imports)
 			continue
 		}
-
 		if inImport {
-			addIfInternal(line)
+			imports = addInternalImport(line, prefix, imports)
 		}
 	}
 
+	return imports
+}
+
+// addInternalImport appends the quoted import path from line to imports if it has the given prefix.
+// Handles aliased imports: `_ "path"`, `alias "path"`, `"path"`.
+func addInternalImport(line, prefix string, imports []string) []string {
+	start := strings.Index(line, `"`)
+	if start < 0 {
+		return imports
+	}
+	end := strings.LastIndex(line, `"`)
+	if end <= start {
+		return imports
+	}
+	imp := line[start+1 : end]
+	if strings.HasPrefix(imp, prefix) {
+		return append(imports, imp)
+	}
 	return imports
 }
 

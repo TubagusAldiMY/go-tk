@@ -156,40 +156,8 @@ func Generate(entityName string, cfg *config.Config, fields []FieldDef, force, s
 	ui.PrintSection("Generating CRUD: " + data.EntityName)
 
 	for _, f := range files {
-		// Handle file existence based on --force and --skip flags
-		fileExists := generator.FileExists(f.OutputPath)
-		if fileExists {
-			if skip {
-				// --skip: explicitly skip existing files
-				ui.PrintFileSkipped(f.OutputPath)
-				continue
-			}
-			if !force {
-				// Default behavior (no --force, no --skip): skip with warning
-				ui.PrintFileSkipped(f.OutputPath)
-				continue
-			}
-			// --force: fall through to overwrite
-		}
-
-		rendered, err := engine.Render(f.TemplateName, data)
-		if err != nil {
-			return fmt.Errorf("rendering %s: %w", f.TemplateName, err)
-		}
-
-		if generator.IsGoFile(f.OutputPath) {
-			if formatted, err := generator.FormatGo(rendered); err == nil {
-				rendered = formatted
-			}
-		}
-
-		if err := generator.WriteAtomic(f.OutputPath, rendered, 0o644); err != nil {
-			return fmt.Errorf("writing %s: %w", f.OutputPath, err)
-		}
-		ui.PrintFileCreated(f.OutputPath)
-
-		if generator.IsGoFile(f.OutputPath) {
-			_ = generator.RunGoimports(f.OutputPath)
+		if err := writeCRUDFile(engine, f, data, force, skip); err != nil {
+			return err
 		}
 	}
 
@@ -200,6 +168,39 @@ func Generate(entityName string, cfg *config.Config, fields []FieldDef, force, s
 	}
 
 	printCRUDNextSteps(data.EntityName, data.EntityNameLC, data.EntityNamePL)
+	return nil
+}
+
+// writeCRUDFile renders and writes a single CRUD file, respecting --force and --skip flags.
+// Returns nil (skipping) or a render/write error.
+func writeCRUDFile(engine *generator.Engine, f GeneratedFile, data CRUDData, force, skip bool) error {
+	if generator.FileExists(f.OutputPath) {
+		if skip || !force {
+			ui.PrintFileSkipped(f.OutputPath)
+			return nil
+		}
+		// --force: fall through to overwrite
+	}
+
+	rendered, err := engine.Render(f.TemplateName, data)
+	if err != nil {
+		return fmt.Errorf("rendering %s: %w", f.TemplateName, err)
+	}
+
+	if generator.IsGoFile(f.OutputPath) {
+		if formatted, err := generator.FormatGo(rendered); err == nil {
+			rendered = formatted
+		}
+	}
+
+	if err := generator.WriteAtomic(f.OutputPath, rendered, 0o644); err != nil {
+		return fmt.Errorf("writing %s: %w", f.OutputPath, err)
+	}
+	ui.PrintFileCreated(f.OutputPath)
+
+	if generator.IsGoFile(f.OutputPath) {
+		_ = generator.RunGoimports(f.OutputPath)
+	}
 	return nil
 }
 

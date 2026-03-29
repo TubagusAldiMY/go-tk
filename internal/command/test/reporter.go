@@ -10,6 +10,8 @@ import (
 	"github.com/TubagusAldiMY/go-tk/internal/ui"
 )
 
+const fmtTestRow = "  %s  %s%s  %s  %s\n"
+
 // PrintTerminalReport prints a human-readable test report to stdout.
 func PrintTerminalReport(results []TestResult) {
 	ui.PrintSection("API Test Results")
@@ -26,7 +28,7 @@ func PrintTerminalReport(results []TestResult) {
 		duration := fmt.Sprintf("%4dms", r.Duration.Milliseconds())
 
 		if r.Error != "" {
-			fmt.Printf("  %s  %s%s  %s  %s\n",
+			fmt.Printf(fmtTestRow,
 				ui.StyleError.Render("✗"),
 				r.Name, pad,
 				ui.StyleMuted.Render(duration),
@@ -34,7 +36,7 @@ func PrintTerminalReport(results []TestResult) {
 			)
 		} else if r.Pass {
 			status := ui.StyleSuccess.Render(fmt.Sprintf("%d", r.StatusCode))
-			fmt.Printf("  %s  %s%s  %s  %s\n",
+			fmt.Printf(fmtTestRow,
 				ui.StyleSuccess.Render("✓"),
 				r.Name, pad,
 				ui.StyleMuted.Render(duration),
@@ -42,7 +44,7 @@ func PrintTerminalReport(results []TestResult) {
 			)
 		} else {
 			status := ui.StyleError.Render(fmt.Sprintf("%d", r.StatusCode))
-			fmt.Printf("  %s  %s%s  %s  %s\n",
+			fmt.Printf(fmtTestRow,
 				ui.StyleError.Render("✗"),
 				r.Name, pad,
 				ui.StyleMuted.Render(duration),

@@ -47,6 +47,28 @@ type ParsedField struct {
 	Comment string            // Inline or doc comment
 }
 
+// extractStructFields converts an AST StructType into a slice of ParsedField values.
+// Anonymous (embedded) fields are skipped.
+func extractStructFields(structType *ast.StructType) []ParsedField {
+	var fields []ParsedField
+	for _, field := range structType.Fields.List {
+		pf := ParsedField{
+			Type: typeToString(field.Type),
+			Tags: parseTags(field.Tag),
+		}
+		if field.Comment != nil {
+			pf.Comment = strings.TrimSpace(field.Comment.Text())
+		}
+		if len(field.Names) > 0 {
+			pf.Name = field.Names[0].Name
+		}
+		if pf.Name != "" {
+			fields = append(fields, pf)
+		}
+	}
+	return fields
+}
+
 // ParseStructFromFile opens a Go source file and extracts the named struct.
 // Returns ErrStructNotFound if the struct does not exist in the file.
 //
@@ -100,23 +122,7 @@ func ParseStructFromFile(filePath, structName string) (*ParsedStruct, error) {
 
 			// Extract all fields
 			ps := &ParsedStruct{Name: structName}
-			for _, field := range structType.Fields.List {
-				pf := ParsedField{
-					Type: typeToString(field.Type),
-					Tags: parseTags(field.Tag),
-				}
-				if field.Comment != nil {
-					pf.Comment = strings.TrimSpace(field.Comment.Text())
-				}
-				// field.Names can be empty for anonymous fields (embedding)
-				if len(field.Names) > 0 {
-					pf.Name = field.Names[0].Name
-				}
-				// Only include named fields (skip embedded types for now)
-				if pf.Name != "" {
-					ps.Fields = append(ps.Fields, pf)
-				}
-			}
+			ps.Fields = extractStructFields(structType)
 			return ps, nil
 		}
 	}

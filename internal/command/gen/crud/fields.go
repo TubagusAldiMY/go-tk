@@ -20,6 +20,8 @@ type FieldDef struct {
 	Required    bool
 }
 
+const decimalType = "DECIMAL(10,4)"
+
 // goTypeToDBType maps Go primitive types to PostgreSQL column types.
 var goTypeToDBType = map[string]string{
 	"string":  "VARCHAR(255)",
@@ -27,8 +29,8 @@ var goTypeToDBType = map[string]string{
 	"int64":   "BIGINT",
 	"uint":    "INTEGER",
 	"uint64":  "BIGINT",
-	"float32": "DECIMAL(10,4)",
-	"float64": "DECIMAL(10,4)",
+	"float32": decimalType,
+	"float64": decimalType,
 	"bool":    "BOOLEAN",
 	"[]byte":  "BYTEA",
 }
@@ -40,8 +42,8 @@ var goTypeToDBTypeMySQL = map[string]string{
 	"int64":   "BIGINT",
 	"uint":    "INT UNSIGNED",
 	"uint64":  "BIGINT UNSIGNED",
-	"float32": "DECIMAL(10,4)",
-	"float64": "DECIMAL(10,4)",
+	"float32": decimalType,
+	"float64": decimalType,
 	"bool":    "TINYINT(1)",
 	"[]byte":  "BLOB",
 }
@@ -72,53 +74,57 @@ func ParseFields(raw string) ([]FieldDef, error) {
 			rawType = rawType[:len(rawType)-1]
 		}
 
-		goType := rawType
-		if optional {
-			goType = "*" + rawType
-		}
-
-		dbType, ok := goTypeToDBType[rawType]
-		if !ok {
-			dbType = "TEXT" // safe fallback
-		}
-
-		dbTypeMySQL, ok := goTypeToDBTypeMySQL[rawType]
-		if !ok {
-			dbTypeMySQL = "TEXT" // safe fallback
-		}
-
-		snake := toSnakeCase(rawName)
-		pascal := toPascalCase(rawName)
-
-		gormTag := fmt.Sprintf("column:%s;type:%s", snake, strings.ToLower(dbType))
-		if !optional {
-			gormTag += ";not null"
-		}
-
-		validTag := ""
-		if !optional {
-			validTag = "required"
-			if rawType == "string" {
-				validTag += ",max=255"
-			}
-		}
-
-		fields = append(fields, FieldDef{
-			Name:        pascal,
-			NameLC:      toCamelCase(rawName),
-			NameSnake:   snake,
-			GoType:      goType,
-			DBType:      dbType,
-			DBTypeMySQL: dbTypeMySQL,
-			GormTag:     gormTag,
-			JSONTag:     snake,
-			ValidTag:    validTag,
-			ColumnName:  snake,
-			Required:    !optional,
-		})
+		fields = append(fields, buildFieldDef(rawName, rawType, optional))
 	}
 
 	return fields, nil
+}
+
+// buildFieldDef constructs a FieldDef from a raw name, type, and optional flag.
+func buildFieldDef(rawName, rawType string, optional bool) FieldDef {
+	goType := rawType
+	if optional {
+		goType = "*" + rawType
+	}
+
+	dbType, ok := goTypeToDBType[rawType]
+	if !ok {
+		dbType = "TEXT"
+	}
+
+	dbTypeMySQL, ok := goTypeToDBTypeMySQL[rawType]
+	if !ok {
+		dbTypeMySQL = "TEXT"
+	}
+
+	snake := toSnakeCase(rawName)
+
+	gormTag := fmt.Sprintf("column:%s;type:%s", snake, strings.ToLower(dbType))
+	if !optional {
+		gormTag += ";not null"
+	}
+
+	validTag := ""
+	if !optional {
+		validTag = "required"
+		if rawType == "string" {
+			validTag += ",max=255"
+		}
+	}
+
+	return FieldDef{
+		Name:        toPascalCase(rawName),
+		NameLC:      toCamelCase(rawName),
+		NameSnake:   snake,
+		GoType:      goType,
+		DBType:      dbType,
+		DBTypeMySQL: dbTypeMySQL,
+		GormTag:     gormTag,
+		JSONTag:     snake,
+		ValidTag:    validTag,
+		ColumnName:  snake,
+		Required:    !optional,
+	}
 }
 
 // toPascalCase converts snake_case or camelCase to PascalCase.

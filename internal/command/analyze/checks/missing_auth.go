@@ -41,6 +41,50 @@ func CheckMissingAuth(internalDir string) ([]types.Issue, int, error) {
 	return issues, scanned, nil
 }
 
+// collectMissingAuthIssues inspects a single router function for missing auth on sensitive routes.
+func collectMissingAuthIssues(fn *ast.FuncDecl, fset *token.FileSet, relPath string) []types.Issue {
+	hasAuth := functionHasAuthMiddleware(fn.Body)
+	var issues []types.Issue
+	ast.Inspect(fn.Body, func(inner ast.Node) bool {
+		issue := checkCallForMissingAuth(inner, fset, relPath, hasAuth)
+		if issue != nil {
+			issues = append(issues, *issue)
+		}
+		return true
+	})
+	return issues
+}
+
+// checkCallForMissingAuth evaluates a single AST node and returns an issue if it is a
+// sensitive mutable route without auth middleware, nil otherwise.
+func checkCallForMissingAuth(n ast.Node, fset *token.FileSet, relPath string, hasAuthMiddleware bool) *types.Issue {
+	call, ok := n.(*ast.CallExpr)
+	if !ok {
+		return nil
+	}
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || !mutableMethods[sel.Sel.Name] || len(call.Args) < 2 {
+		return nil
+	}
+	pathLit, ok := call.Args[0].(*ast.BasicLit)
+	if !ok {
+		return nil
+	}
+	routePath := strings.Trim(pathLit.Value, `"`)
+	if !isSensitivePath(routePath) || hasAuthMiddleware {
+		return nil
+	}
+	pos := fset.Position(call.Pos())
+	issue := types.Issue{
+		Kind:     types.KindMissingAuth,
+		Severity: types.SeverityLow,
+		File:     relPath,
+		Line:     pos.Line,
+		Message:  fmt.Sprintf("route %s %q may be missing auth middleware — no auth/jwt middleware found in router function (heuristic)", strings.ToUpper(sel.Sel.Name), routePath),
+	}
+	return &issue
+}
+
 func checkRouterFileForMissingAuth(filePath string) []types.Issue {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, filePath, nil, 0)
@@ -57,59 +101,7 @@ func checkRouterFileForMissingAuth(filePath string) []types.Issue {
 		if !ok || fn.Body == nil {
 			return true
 		}
-
-		// Does this function have any auth/jwt middleware call at all?
-		hasAuthMiddleware := functionHasAuthMiddleware(fn.Body)
-
-		// Collect all route registrations with mutable methods.
-		ast.Inspect(fn.Body, func(inner ast.Node) bool {
-			call, ok := inner.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
-
-			sel, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok {
-				return true
-			}
-
-			method := sel.Sel.Name
-			if !mutableMethods[method] {
-				return true
-			}
-
-			if len(call.Args) < 2 {
-				return true
-			}
-
-			pathLit, ok := call.Args[0].(*ast.BasicLit)
-			if !ok {
-				return true
-			}
-			routePath := strings.Trim(pathLit.Value, `"`)
-
-			// Only flag if the path looks sensitive.
-			if !isSensitivePath(routePath) {
-				return true
-			}
-
-			if !hasAuthMiddleware {
-				pos := fset.Position(call.Pos())
-				issues = append(issues, types.Issue{
-					Kind:     types.KindMissingAuth,
-					Severity: types.SeverityLow,
-					File:     relPath,
-					Line:     pos.Line,
-					Message: fmt.Sprintf(
-						"route %s %q may be missing auth middleware — no auth/jwt middleware found in router function (heuristic)",
-						strings.ToUpper(method), routePath,
-					),
-				})
-			}
-
-			return true
-		})
-
+		issues = append(issues, collectMissingAuthIssues(fn, fset, relPath)...)
 		return true
 	})
 

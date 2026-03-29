@@ -31,12 +31,7 @@ func CheckDeadRoutes(internalDir string) ([]types.Issue, int, error) {
 			continue
 		}
 		for _, r := range routes {
-			// Handler is "varName.MethodName" — extract method name (right of last dot)
-			if idx := strings.LastIndex(r.Handler, "."); idx >= 0 {
-				if m := r.Handler[idx+1:]; m != "" && m != "<unknown>" {
-					routedMethods[m] = true
-				}
-			}
+			addRoutedMethod(r.Handler, routedMethods)
 		}
 	}
 
@@ -61,7 +56,14 @@ func CheckDeadRoutes(internalDir string) ([]types.Issue, int, error) {
 	// ── 3. Dead routes: route methods that exist in no handler file ───────────
 	// Build set of all declared handler methods.
 	declaredMethods := collectDeclaredHandlerMethods(handlerDir)
+	issues = append(issues, checkDeadRouteRegistrations(routerFiles, declaredMethods)...)
 
+	return issues, scanned, nil
+}
+
+// checkDeadRouteRegistrations finds routes whose handler method is not declared in any handler file.
+func checkDeadRouteRegistrations(routerFiles []string, declaredMethods map[string]bool) []types.Issue {
+	var issues []types.Issue
 	for _, rf := range routerFiles {
 		routes, err := goparser.ParseRoutesFromFile(rf)
 		if err != nil {
@@ -69,25 +71,69 @@ func CheckDeadRoutes(internalDir string) ([]types.Issue, int, error) {
 		}
 		relPath := shortenPath(rf)
 		for _, r := range routes {
-			if idx := strings.LastIndex(r.Handler, "."); idx >= 0 {
-				m := r.Handler[idx+1:]
-				if m == "" || m == "<unknown>" || m == "func" {
-					continue
-				}
-				if !declaredMethods[m] {
-					issues = append(issues, types.Issue{
-						Kind:     types.KindDeadRoute,
-						Severity: types.SeverityHigh,
-						File:     relPath,
-						Message: fmt.Sprintf("route %s %s references handler method %q which is not declared in any handler file",
-							r.Method, r.Path, m),
-					})
-				}
+			if issue := deadRouteIssue(r.Handler, r.Method, r.Path, relPath, declaredMethods); issue != nil {
+				issues = append(issues, *issue)
 			}
 		}
 	}
+	return issues
+}
 
-	return issues, scanned, nil
+// addRoutedMethod extracts the method name from a handler string ("var.Method") and records it.
+func addRoutedMethod(handler string, routedMethods map[string]bool) {
+	idx := strings.LastIndex(handler, ".")
+	if idx < 0 {
+		return
+	}
+	if m := handler[idx+1:]; m != "" && m != "<unknown>" {
+		routedMethods[m] = true
+	}
+}
+
+// deadRouteIssue returns an Issue if the handler method is not in declaredMethods, nil otherwise.
+func deadRouteIssue(handler, method, path, relPath string, declared map[string]bool) *types.Issue {
+	idx := strings.LastIndex(handler, ".")
+	if idx < 0 {
+		return nil
+	}
+	m := handler[idx+1:]
+	if m == "" || m == "<unknown>" || m == "func" {
+		return nil
+	}
+	if declared[m] {
+		return nil
+	}
+	issue := types.Issue{
+		Kind:     types.KindDeadRoute,
+		Severity: types.SeverityHigh,
+		File:     relPath,
+		Message:  fmt.Sprintf("route %s %s references handler method %q which is not declared in any handler file", method, path, m),
+	}
+	return &issue
+}
+
+// orphanedMethodIssue checks a single receiver field and returns an issue if the method is unrouted.
+func orphanedMethodIssue(field *ast.Field, fn *ast.FuncDecl, fset *token.FileSet, relPath string, routedMethods map[string]bool) *types.Issue {
+	typeName := extractReceiverTypeName(field.Type)
+	if !strings.HasSuffix(typeName, "Handler") {
+		return nil
+	}
+	methodName := fn.Name.Name
+	if methodName == "RegisterRoutes" || strings.HasPrefix(methodName, "New") {
+		return nil
+	}
+	if routedMethods[methodName] {
+		return nil
+	}
+	pos := fset.Position(fn.Pos())
+	issue := types.Issue{
+		Kind:     types.KindDeadRoute,
+		Severity: types.SeverityLow,
+		File:     relPath,
+		Line:     pos.Line,
+		Message:  fmt.Sprintf("handler method %s.%s is declared but not registered in any route", typeName, methodName),
+	}
+	return &issue
 }
 
 // checkOrphanedMethods finds exported methods on *XxxHandler receiver types
@@ -109,27 +155,8 @@ func checkOrphanedMethods(filePath string, routedMethods map[string]bool) []type
 		}
 
 		for _, field := range fn.Recv.List {
-			typeName := extractReceiverTypeName(field.Type)
-			if !strings.HasSuffix(typeName, "Handler") {
-				continue
-			}
-
-			methodName := fn.Name.Name
-			// Skip infrastructure methods that are never route handlers.
-			if methodName == "RegisterRoutes" || strings.HasPrefix(methodName, "New") {
-				continue
-			}
-
-			if !routedMethods[methodName] {
-				pos := fset.Position(fn.Pos())
-				issues = append(issues, types.Issue{
-					Kind:     types.KindDeadRoute,
-					Severity: types.SeverityLow,
-					File:     relPath,
-					Line:     pos.Line,
-					Message: fmt.Sprintf("handler method %s.%s is declared but not registered in any route",
-						typeName, methodName),
-				})
+			if issue := orphanedMethodIssue(field, fn, fset, relPath, routedMethods); issue != nil {
+				issues = append(issues, *issue)
 			}
 		}
 		return true
@@ -138,34 +165,37 @@ func checkOrphanedMethods(filePath string, routedMethods map[string]bool) []type
 	return issues
 }
 
+// recordHandlerMethods parses a single Go file and records exported handler method names.
+func recordHandlerMethods(path string, declared map[string]bool) {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, path, nil, 0)
+	if err != nil {
+		return
+	}
+	ast.Inspect(f, func(n ast.Node) bool {
+		fn, ok := n.(*ast.FuncDecl)
+		if !ok || fn.Recv == nil || !fn.Name.IsExported() {
+			return true
+		}
+		for _, field := range fn.Recv.List {
+			if strings.HasSuffix(extractReceiverTypeName(field.Type), "Handler") {
+				declared[fn.Name.Name] = true
+			}
+		}
+		return true
+	})
+}
+
 // collectDeclaredHandlerMethods returns all exported method names on *Handler types.
 func collectDeclaredHandlerMethods(handlerDir string) map[string]bool {
 	declared := make(map[string]bool)
-
 	filepath.WalkDir(handlerDir, func(path string, d fs.DirEntry, err error) error { //nolint:errcheck
 		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".go") || isTestFile(path) {
 			return nil
 		}
-		fset := token.NewFileSet()
-		f, err := parser.ParseFile(fset, path, nil, 0)
-		if err != nil {
-			return nil
-		}
-		ast.Inspect(f, func(n ast.Node) bool {
-			fn, ok := n.(*ast.FuncDecl)
-			if !ok || fn.Recv == nil || !fn.Name.IsExported() {
-				return true
-			}
-			for _, field := range fn.Recv.List {
-				if strings.HasSuffix(extractReceiverTypeName(field.Type), "Handler") {
-					declared[fn.Name.Name] = true
-				}
-			}
-			return true
-		})
+		recordHandlerMethods(path, declared)
 		return nil
 	})
-
 	return declared
 }
 

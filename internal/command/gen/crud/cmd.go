@@ -82,9 +82,7 @@ type crudFlags struct {
 }
 
 func runCrud(entityName string, flags *crudFlags) error {
-	fmt.Println()
-	fmt.Println(ui.Banner())
-	fmt.Println()
+	ui.PrintBanner()
 
 	// Load project config from gotk.yaml.
 	cwd, err := os.Getwd()

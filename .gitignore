@@ -35,11 +35,28 @@ Thumbs.db
 # Build artifacts
 build/
 
-# Environment
+# Environment & credentials
 .env
+.env.*
 *.local
+*.secret
+secrets.json
+credentials.json
+service-account*.json
+*-service-account.json
 
-dokumen
-.claude
+# Private keys & certificates
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+
+# Project-local working files (not for public repo)
+progres.md
+dokumen/
+.claude/
 CLAUDE.md
+AGENTS.md
 todo.md

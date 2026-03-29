@@ -16,37 +16,37 @@ import (
 
 // JSONTestOutput is the machine-readable output format for CI integration.
 type JSONTestOutput struct {
-	Success bool             `json:"success"`
-	Data    *JSONTestData    `json:"data"`
-	Meta    *JSONTestMeta    `json:"meta"`
+	Success bool          `json:"success"`
+	Data    *JSONTestData `json:"data"`
+	Meta    *JSONTestMeta `json:"meta"`
 }
 
 // JSONTestData contains the test results.
 type JSONTestData struct {
-	TotalTests  int              `json:"total_tests"`
-	Passed      int              `json:"passed"`
-	Failed      int              `json:"failed"`
-	PassRate    float64          `json:"pass_rate"`
-	Results     []JSONTestResult `json:"results"`
+	TotalTests int              `json:"total_tests"`
+	Passed     int              `json:"passed"`
+	Failed     int              `json:"failed"`
+	PassRate   float64          `json:"pass_rate"`
+	Results    []JSONTestResult `json:"results"`
 }
 
 // JSONTestResult represents a single test result.
 type JSONTestResult struct {
-	Method       string  `json:"method"`
-	Path         string  `json:"path"`
-	StatusCode   int     `json:"status_code"`
-	Expected     int     `json:"expected"`
-	Passed       bool    `json:"passed"`
-	DurationMs   float64 `json:"duration_ms"`
-	Error        string  `json:"error,omitempty"`
+	Method     string  `json:"method"`
+	Path       string  `json:"path"`
+	StatusCode int     `json:"status_code"`
+	Expected   int     `json:"expected"`
+	Passed     bool    `json:"passed"`
+	DurationMs float64 `json:"duration_ms"`
+	Error      string  `json:"error,omitempty"`
 }
 
 // JSONTestMeta contains metadata about the test run.
 type JSONTestMeta struct {
-	BaseURL       string    `json:"base_url"`
-	Timestamp     time.Time `json:"timestamp"`
-	TimeoutSec    int       `json:"timeout_sec"`
-	RoutesFound   int       `json:"routes_found"`
+	BaseURL     string    `json:"base_url"`
+	Timestamp   time.Time `json:"timestamp"`
+	TimeoutSec  int       `json:"timeout_sec"`
+	RoutesFound int       `json:"routes_found"`
 }
 
 // TestCmd returns the cobra.Command for "go-tk test".
@@ -107,33 +107,25 @@ type testFlags struct {
 }
 
 func runTest(flags *testFlags) error {
-	// Validate output format
 	if flags.format != "text" && flags.format != "json" {
 		return fmt.Errorf("invalid format: %s (valid: text, json)", flags.format)
 	}
 
-	cwd, _ := os.Getwd()
-
-	// Load project config for PORT.
-	cfg, _ := config.Load(cwd) // best-effort
-
-	// Skip banner for JSON output
-	if flags.format != "json" {
-		fmt.Println()
-		fmt.Println(ui.Banner())
-		fmt.Println()
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("getting working directory: %w", err)
 	}
 
-	// Discover routes
+	cfg, _ := config.Load(cwd)
+
 	if flags.format != "json" {
+		ui.PrintBanner()
 		ui.PrintSection("Discovering routes")
 	}
-	routes, err := DiscoverRoutes(cwd)
+
+	routes, err := discoverFilteredRoutes(cwd, flags)
 	if err != nil {
-		if flags.format == "json" {
-			return outputTestJSONError("route discovery: " + err.Error())
-		}
-		return fmt.Errorf("route discovery: %w", err)
+		return err
 	}
 
 	if len(routes) == 0 {
@@ -144,70 +136,86 @@ func runTest(flags *testFlags) error {
 		return nil
 	}
 
-	// Apply filters
-	routes = filterRoutes(routes, flags.method, flags.route)
 	if flags.format != "json" {
 		fmt.Printf("  Found %d route(s)\n", len(routes))
 	}
 
-	// Generate test cases
 	cases := GenerateTestCases(routes)
 
 	if flags.generateOnly {
-		if flags.format == "json" {
-			// Output generated test cases as JSON
-			output := map[string]interface{}{
-				"success": true,
-				"data": map[string]interface{}{
-					"test_cases": cases,
-					"count":      len(cases),
-				},
-			}
-			encoder := json.NewEncoder(os.Stdout)
-			encoder.SetIndent("", "  ")
-			return encoder.Encode(output)
-		}
-		ui.PrintSection("Generated test cases")
-		for _, tc := range cases {
-			body := ""
-			if tc.Body != "" {
-				body = "  body: " + tc.Body
-			}
-			fmt.Printf("  %s %s%s\n", ui.StyleMuted.Render(fmt.Sprintf("%-8s", tc.Method)), tc.Path, body)
-		}
-		return nil
+		return handleGenerateOnly(flags, cases)
 	}
 
-	// Resolve base URL
-	baseURL := flags.baseURL
-	if baseURL == "" {
-		port := "8080"
-		if cfg != nil {
-			// Try to read PORT from .env
-			if envPort := readEnvPort(cwd); envPort != "" {
-				port = envPort
-			}
-		}
-		baseURL = "http://localhost:" + port
-	}
-
+	baseURL := resolveBaseURL(flags, cfg, cwd)
 	if flags.format != "json" {
 		ui.PrintSection("Running tests against " + baseURL)
 	}
 
-	// Execute tests
+	return executeAndReport(flags, routes, cases, baseURL)
+}
+
+// discoverFilteredRoutes discovers routes and applies method/path filters.
+func discoverFilteredRoutes(cwd string, flags *testFlags) ([]RouteInfo, error) {
+	routes, err := DiscoverRoutes(cwd)
+	if err != nil {
+		if flags.format == "json" {
+			return nil, outputTestJSONError("route discovery: " + err.Error())
+		}
+		return nil, fmt.Errorf("route discovery: %w", err)
+	}
+	return filterRoutes(routes, flags.method, flags.route), nil
+}
+
+// handleGenerateOnly outputs the generated test cases without executing them.
+func handleGenerateOnly(flags *testFlags, cases []TestCase) error {
+	if flags.format == "json" {
+		output := map[string]interface{}{
+			"success": true,
+			"data": map[string]interface{}{
+				"test_cases": cases,
+				"count":      len(cases),
+			},
+		}
+		encoder := json.NewEncoder(os.Stdout)
+		encoder.SetIndent("", "  ")
+		return encoder.Encode(output)
+	}
+	ui.PrintSection("Generated test cases")
+	for _, tc := range cases {
+		body := ""
+		if tc.Body != "" {
+			body = "  body: " + tc.Body
+		}
+		fmt.Printf("  %s %s%s\n", ui.StyleMuted.Render(fmt.Sprintf("%-8s", tc.Method)), tc.Path, body)
+	}
+	return nil
+}
+
+// resolveBaseURL returns the target server URL from flags, env, or default.
+func resolveBaseURL(flags *testFlags, cfg *config.Config, cwd string) string {
+	if flags.baseURL != "" {
+		return flags.baseURL
+	}
+	port := "8080"
+	if cfg != nil {
+		if envPort := readEnvPort(cwd); envPort != "" {
+			port = envPort
+		}
+	}
+	return "http://localhost:" + port
+}
+
+// executeAndReport runs test cases and outputs results in the requested format.
+func executeAndReport(flags *testFlags, routes []RouteInfo, cases []TestCase, baseURL string) error {
 	runner := NewRunner(baseURL, flags.timeout)
 	results := runner.Run(cases)
 
-	// Output based on format
 	if flags.format == "json" {
 		return outputTestJSON(results, baseURL, len(routes), int(flags.timeout.Seconds()))
 	}
 
-	// Print terminal report
 	PrintTerminalReport(results)
 
-	// Write HTML report if requested
 	if flags.output != "" {
 		if err := WriteHTMLReport(results, flags.output); err != nil {
 			ui.PrintError("Writing HTML report: " + err.Error())
@@ -216,7 +224,6 @@ func runTest(flags *testFlags) error {
 		}
 	}
 
-	// Exit with error if any tests failed
 	_, failed := Summary(results)
 	if failed > 0 {
 		return fmt.Errorf("%d test(s) failed", failed)

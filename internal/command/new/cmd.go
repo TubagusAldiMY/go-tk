@@ -75,16 +75,45 @@ func runNew(projectName string, flags *newFlags) error {
 		return err
 	}
 
-	fmt.Println()
-	fmt.Println(ui.Banner())
-	fmt.Println()
+	ui.PrintBanner()
 
-	var opts *ProjectOptions
-	var err error
+	opts, err := buildProjectOptions(flags, projectName)
+	if err != nil {
+		return err
+	}
 
-	// Non-interactive if both framework and db are supplied via flags.
+	targetDir := filepath.Join(".", projectName)
+
+	if !flags.dryRun {
+		if entries, err := os.ReadDir(targetDir); err == nil && len(entries) > 0 {
+			return fmt.Errorf("%w: %s — use a different name or remove the directory", ErrProjectExists, targetDir)
+		}
+	}
+
+	if err := ValidateFS(opts.Framework, opts.Database); err != nil {
+		return err
+	}
+
+	ui.PrintSection("Generating project: " + projectName)
+
+	if err := GenerateProject(opts, targetDir, flags.dryRun); err != nil {
+		handleGenerationError(err, targetDir)
+		return err
+	}
+
+	if flags.dryRun {
+		ui.PrintHint("Run without --dry-run to create the project.")
+		return nil
+	}
+
+	printNextSteps(projectName, opts)
+	return nil
+}
+
+// buildProjectOptions constructs ProjectOptions from flags or interactive prompts.
+func buildProjectOptions(flags *newFlags, projectName string) (*ProjectOptions, error) {
 	if flags.framework != "" && flags.db != "" {
-		opts = &ProjectOptions{
+		return &ProjectOptions{
 			ProjectName: projectName,
 			ModulePath:  resolveModulePath(flags.module, projectName),
 			Framework:   flags.framework,
@@ -93,46 +122,26 @@ func runNew(projectName string, flags *newFlags) error {
 			Auth:        flags.auth,
 			HasDocker:   flags.docker,
 			HasCICD:     flags.cicd,
-		}
+		}, nil
+	}
+	opts, err := RunInteractivePrompts(projectName)
+	if err != nil {
+		return nil, fmt.Errorf("prompts: %w", err)
+	}
+	if flags.module != "" {
+		opts.ModulePath = flags.module
+	}
+	return opts, nil
+}
+
+// handleGenerationError prints a user-friendly error message for generation failures.
+func handleGenerationError(err error, targetDir string) {
+	if strings.Contains(err.Error(), "build validation failed") {
+		ui.PrintError(err.Error())
+		ui.PrintHint("Fix the errors above, then run: go build ./... inside " + targetDir)
 	} else {
-		opts, err = RunInteractivePrompts(projectName)
-		if err != nil {
-			return fmt.Errorf("prompts: %w", err)
-		}
-		if flags.module != "" {
-			opts.ModulePath = flags.module
-		}
-	}
-
-	targetDir := filepath.Join(".", projectName)
-
-	if !flags.dryRun {
-		// Check if directory already exists and is non-empty.
-		if entries, err := os.ReadDir(targetDir); err == nil && len(entries) > 0 {
-			return fmt.Errorf("%w: %s — use a different name or remove the directory", ErrProjectExists, targetDir)
-		}
-	}
-
-	// Validate the requested stack has templates.
-	if err := ValidateFS(opts.Framework, opts.Database); err != nil {
-		return err
-	}
-
-	ui.PrintSection("Generating project: " + projectName)
-
-	if err := GenerateProject(opts, targetDir, flags.dryRun); err != nil {
 		ui.PrintError("Generation failed: " + err.Error())
-		return err
 	}
-
-	if flags.dryRun {
-		fmt.Println()
-		ui.PrintHint("Run without --dry-run to create the project.")
-		return nil
-	}
-
-	printNextSteps(projectName, opts)
-	return nil
 }
 
 func printNextSteps(name string, opts *ProjectOptions) {

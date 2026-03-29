@@ -1,5 +1,7 @@
 package dto
 
+import "{{.ModulePath}}/internal/domain/entity"
+
 // Create{{.EntityName}}Request holds fields for creating a new {{.EntityName}}.
 type Create{{.EntityName}}Request struct {
 {{- range .Fields}}
@@ -24,9 +26,13 @@ type {{.EntityName}}Response struct {
 }
 
 // From{{.EntityName}} converts a domain entity to a response DTO.
-func From{{.EntityName}}(e interface{ /* entity.{{.EntityName}} */ }) *{{.EntityName}}Response {
-	// TODO: populate fields after confirming entity import
-	return &{{.EntityName}}Response{}
+func From{{.EntityName}}(e *entity.{{.EntityName}}) *{{.EntityName}}Response {
+	return &{{.EntityName}}Response{
+		ID: e.ID,
+{{- range .Fields}}
+		{{.Name}}: e.{{.Name}},
+{{- end}}
+	}
 }
 
 // PaginatedResponse wraps a list of items with pagination metadata.

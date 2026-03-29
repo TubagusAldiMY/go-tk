@@ -34,6 +34,7 @@ import (
 	migratecmd "github.com/TubagusAldiMY/go-tk/internal/command/migrate"
 	newcmd "github.com/TubagusAldiMY/go-tk/internal/command/new"
 	testcmd "github.com/TubagusAldiMY/go-tk/internal/command/test"
+	"github.com/TubagusAldiMY/go-tk/internal/ui"
 	gotktmpl "github.com/TubagusAldiMY/go-tk/templates"
 )
 
@@ -51,7 +52,7 @@ func main() {
 	// SilenceUsage/SilenceErrors in root command prevent Cobra
 	// from printing redundant error output.
 	if err := root.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintf(os.Stderr, "[ERROR] %s\n", err)
 		os.Exit(1)
 	}
 }
@@ -74,6 +75,8 @@ func main() {
 //
 // Silence flags prevent duplicate error output — we handle errors explicitly in main().
 func buildRootCmd() *cobra.Command {
+	var quiet bool
+
 	root := &cobra.Command{
 		Use:   "go-tk",
 		Short: "Go Backend Toolkit — scaffold, generate, migrate, analyze",
@@ -85,7 +88,12 @@ by providing opinionated code generation, migration management, and analysis.
 Learn more: https://github.com/TubagusAldiMY/go-tk`,
 		SilenceUsage:  true, // Don't print usage on error (only on --help)
 		SilenceErrors: true, // We print errors manually in main()
+		PersistentPreRun: func(cmd *cobra.Command, args []string) {
+			ui.Quiet = quiet
+		},
 	}
+
+	root.PersistentFlags().BoolVarP(&quiet, "quiet", "q", false, "Suppress informational output (errors and final status only)")
 
 	// Version template uses values injected at build time via ldflags.
 	// See Makefile LDFLAGS for injection points.

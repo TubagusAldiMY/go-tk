@@ -14,6 +14,8 @@ import (
 	"github.com/TubagusAldiMY/go-tk/internal/ui"
 )
 
+const errGettingCwd = "getting working directory: %w"
+
 // MigrateCmd returns the cobra.Command for "go-tk migrate".
 func MigrateCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -110,7 +112,10 @@ func createCmd() *cobra.Command {
 		Short: "Create a new migration file pair (.up.sql + .down.sql)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cwd, _ := os.Getwd()
+			cwd, err := os.Getwd()
+			if err != nil {
+				return fmt.Errorf(errGettingCwd, err)
+			}
 			cfg, err := config.Load(cwd)
 			if err != nil {
 				return config.ErrConfigNotFound
@@ -133,7 +138,10 @@ func validateCmd() *cobra.Command {
 		Use:   "validate",
 		Short: "Validate migration file pairs",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cwd, _ := os.Getwd()
+			cwd, err := os.Getwd()
+			if err != nil {
+				return fmt.Errorf(errGettingCwd, err)
+			}
 			cfg, err := config.Load(cwd)
 			if err != nil {
 				return config.ErrConfigNotFound
@@ -150,7 +158,7 @@ func validateCmd() *cobra.Command {
 func withRunner(fn func(r *Runner, cfg *config.Config) error) error {
 	cwd, err := os.Getwd()
 	if err != nil {
-		return fmt.Errorf("getting working directory: %w", err)
+		return fmt.Errorf(errGettingCwd, err)
 	}
 	cfg, err := config.Load(cwd)
 	if err != nil {

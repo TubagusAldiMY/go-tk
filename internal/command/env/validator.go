@@ -8,6 +8,8 @@ import (
 	"strings"
 )
 
+const errReadingFile = "reading %s: %w"
+
 // VarStatus represents the validation state of a single env variable.
 type VarStatus int
 
@@ -21,9 +23,10 @@ const (
 
 // VarResult holds the result for one environment variable.
 type VarResult struct {
-	Key    string
-	Status VarStatus
-	Value  string // masked or empty
+	Key      string
+	Status   VarStatus
+	Value    string // masked for display
+	RawValue string // unmasked for internal validation (e.g. placeholder check)
 }
 
 // ValidationResult holds the complete validation outcome.
@@ -44,12 +47,12 @@ func (r *ValidationResult) IsOK() bool {
 func Validate(envFile, exampleFile string) (*ValidationResult, error) {
 	example, err := parseEnvFile(exampleFile)
 	if err != nil {
-		return nil, fmt.Errorf("reading %s: %w", exampleFile, err)
+		return nil, fmt.Errorf(errReadingFile, exampleFile, err)
 	}
 
 	actual, err := parseEnvFile(envFile)
 	if err != nil && !os.IsNotExist(err) {
-		return nil, fmt.Errorf("reading %s: %w", envFile, err)
+		return nil, fmt.Errorf(errReadingFile, envFile, err)
 	}
 
 	result := &ValidationResult{}
@@ -76,9 +79,10 @@ func Validate(envFile, exampleFile string) (*ValidationResult, error) {
 		}
 
 		result.Vars = append(result.Vars, VarResult{
-			Key:    key,
-			Status: status,
-			Value:  maskValue(key, actualVal),
+			Key:      key,
+			Status:   status,
+			Value:    maskValue(key, actualVal),
+			RawValue: actualVal,
 		})
 	}
 
@@ -98,7 +102,7 @@ func Validate(envFile, exampleFile string) (*ValidationResult, error) {
 func Sync(envFile, exampleFile string) (added []string, err error) {
 	example, err := parseEnvFile(exampleFile)
 	if err != nil {
-		return nil, fmt.Errorf("reading %s: %w", exampleFile, err)
+		return nil, fmt.Errorf(errReadingFile, exampleFile, err)
 	}
 
 	actual, _ := parseEnvFile(envFile) // ignore error — file may not exist yet
@@ -131,7 +135,7 @@ func Sync(envFile, exampleFile string) (added []string, err error) {
 func GenerateExample(envFile, exampleFile string) error {
 	lines, err := readLines(envFile)
 	if err != nil {
-		return fmt.Errorf("reading %s: %w", envFile, err)
+		return fmt.Errorf(errReadingFile, envFile, err)
 	}
 
 	var out strings.Builder

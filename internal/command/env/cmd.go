@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -17,17 +18,19 @@ import (
 const (
 	defaultEnvFile     = ".env"
 	defaultExampleFile = ".env.example"
+	fmtSingleItem      = "  %s\n"
+	fmtTableRow        = "  %s %s   %s\n"
 )
 
 // EnvCmd returns the cobra.Command for "go-tk env".
 func EnvCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "env",
-		Short: "Environment variable management (validate, sync, generate-example, check, db-check)",
+		Short: "Environment variable management (validate, sync, generate-example, check)",
 		Long: `Manage .env files for your go-tk project.
 
 Validates your .env against .env.example, syncs missing keys,
-and provides pre-deploy preflight checks.`,
+and provides pre-deploy preflight checks including optional DB connectivity (--db).`,
 	}
 
 	cmd.AddCommand(validateCmd())
@@ -62,7 +65,9 @@ func validateCmd() *cobra.Command {
 				return err
 			}
 
-			printValidationResult(result)
+			if !ui.Quiet {
+				printValidationResult(result)
+			}
 
 			if !result.IsOK() {
 				return fmt.Errorf("%d missing, %d empty required variable(s)", len(result.Missing), len(result.Empty))
@@ -99,8 +104,10 @@ func syncCmd() *cobra.Command {
 				return nil
 			}
 
-			for _, k := range added {
-				fmt.Printf("  %s %s=\n", ui.StyleSuccess.Render("+"), k)
+			if !ui.Quiet {
+				for _, k := range added {
+					fmt.Printf("  %s %s=\n", ui.StyleSuccess.Render("+"), k)
+				}
 			}
 			ui.PrintDone(fmt.Sprintf("%d key(s) added to .env.", len(added)))
 			ui.PrintHint("Fill in the values before running the application.")
@@ -141,12 +148,15 @@ func generateExampleCmd() *cobra.Command {
 // --- check (pre-deploy preflight) ---
 
 func checkCmd() *cobra.Command {
-	return &cobra.Command{
+	var includeDB bool
+
+	cmd := &cobra.Command{
 		Use:   "check",
 		Short: "Pre-deploy preflight check (strict — exits non-zero on any issue)",
 		Long: `Run a strict pre-deploy check:
 - All required variables must be present and non-empty
 - No variables may have placeholder values (e.g. "change-me")
+- Optionally test database TCP connectivity with --db
 
 Exits with code 1 if any check fails, making it safe to use in CI/CD pipelines.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -165,21 +175,11 @@ Exits with code 1 if any check fails, making it safe to use in CI/CD pipelines.`
 				return err
 			}
 
-			// Check for placeholder values.
-			var placeholders []string
-			for _, v := range result.Vars {
-				if isPlaceholder(v.Value) {
-					placeholders = append(placeholders, v.Key)
-				}
-			}
+			placeholders := collectPlaceholders(result.Vars)
 
-			printValidationResult(result)
-
-			if len(placeholders) > 0 {
-				fmt.Println()
-				for _, k := range placeholders {
-					fmt.Printf("  %s %s contains placeholder value\n", ui.StyleWarning.Render("!"), k)
-				}
+			if !ui.Quiet {
+				printValidationResult(result)
+				printPlaceholderWarnings(placeholders)
 			}
 
 			if !result.IsOK() || len(placeholders) > 0 {
@@ -188,10 +188,41 @@ Exits with code 1 if any check fails, making it safe to use in CI/CD pipelines.`
 				return fmt.Errorf("environment not ready for deployment")
 			}
 
+			if includeDB {
+				if err := runDBCheck(5); err != nil {
+					return fmt.Errorf("database check failed: %w", err)
+				}
+			}
+
 			fmt.Println()
 			ui.PrintDone("Preflight check PASSED — environment is ready.")
 			return nil
 		},
+	}
+
+	cmd.Flags().BoolVar(&includeDB, "db", false, "Also test database TCP connectivity (replaces env db-check)")
+	return cmd
+}
+
+// collectPlaceholders returns keys whose raw values match known placeholder patterns.
+func collectPlaceholders(vars []VarResult) []string {
+	var placeholders []string
+	for _, v := range vars {
+		if isPlaceholder(v.RawValue) {
+			placeholders = append(placeholders, v.Key)
+		}
+	}
+	return placeholders
+}
+
+// printPlaceholderWarnings prints a warning line for each placeholder key.
+func printPlaceholderWarnings(placeholders []string) {
+	if len(placeholders) == 0 {
+		return
+	}
+	fmt.Println()
+	for _, k := range placeholders {
+		fmt.Printf("  %s %s contains placeholder value\n", ui.StyleWarning.Render("!"), k)
 	}
 }
 
@@ -208,36 +239,55 @@ func printValidationResult(result *ValidationResult) {
 
 	for _, v := range result.Vars {
 		pad := repeatStr(" ", maxLen-len(v.Key))
-		key := v.Key + pad
-
-		switch v.Status {
-		case VarPresent:
-			fmt.Printf("  %s %s = %s\n", ui.StyleSuccess.Render("✓"), key, ui.StyleMuted.Render(v.Value))
-		case VarOptional:
-			fmt.Printf("  %s %s   %s\n", ui.StyleMuted.Render("~"), key, ui.StyleMuted.Render("(optional, not set)"))
-		case VarMissing:
-			fmt.Printf("  %s %s   %s\n", ui.StyleError.Render("✗"), key, ui.StyleError.Render("MISSING"))
-		case VarEmpty:
-			fmt.Printf("  %s %s   %s\n", ui.StyleWarning.Render("!"), key, ui.StyleWarning.Render("empty"))
-		}
+		formatVarRow(v, v.Key+pad)
 	}
 
 	if len(result.Extra) > 0 {
 		fmt.Println()
 		for _, k := range result.Extra {
-			fmt.Printf("  %s %s   %s\n", ui.StyleMuted.Render("?"), k, ui.StyleMuted.Render("(not in .env.example)"))
+			fmt.Printf(fmtTableRow, ui.StyleMuted.Render("?"), k, ui.StyleMuted.Render("(not in .env.example)"))
 		}
 	}
 
 	fmt.Println(repeatStr("─", 50))
+	printValidationSummary(result)
+}
 
+// formatVarRow prints a single variable row based on its status.
+func formatVarRow(v VarResult, keyWithPad string) {
+	switch v.Status {
+	case VarPresent:
+		fmt.Printf("  %s %s = %s\n", ui.StyleSuccess.Render("✓"), keyWithPad, ui.StyleMuted.Render(v.Value))
+	case VarOptional:
+		fmt.Printf(fmtTableRow, ui.StyleMuted.Render("~"), keyWithPad, ui.StyleMuted.Render("(optional, not set)"))
+	case VarMissing:
+		fmt.Printf(fmtTableRow, ui.StyleError.Render("✗"), keyWithPad, ui.StyleError.Render("MISSING"))
+	case VarEmpty:
+		fmt.Printf(fmtTableRow, ui.StyleWarning.Render("!"), keyWithPad, ui.StyleWarning.Render("empty"))
+	}
+}
+
+// printValidationSummary prints the summary line after the variable table.
+func printValidationSummary(result *ValidationResult) {
 	total := len(result.Vars)
 	missing := len(result.Missing)
-	if missing > 0 {
-		fmt.Printf("  %s\n", ui.StyleError.Render(fmt.Sprintf("%d/%d required variables missing", missing, total)))
-		fmt.Printf("  %s\n", ui.StyleMuted.Render("Run: go-tk env sync"))
+	empty := len(result.Empty)
+	issues := missing + empty
+	if issues > 0 {
+		msg := fmt.Sprintf("%d/%d required variables have issues", issues, total)
+		if missing > 0 {
+			msg += fmt.Sprintf(" (%d missing", missing)
+			if empty > 0 {
+				msg += fmt.Sprintf(", %d empty", empty)
+			}
+			msg += ")"
+		} else {
+			msg += fmt.Sprintf(" (%d empty)", empty)
+		}
+		fmt.Printf(fmtSingleItem, ui.StyleError.Render(msg))
+		fmt.Printf(fmtSingleItem, ui.StyleMuted.Render("Run: go-tk env sync"))
 	} else {
-		fmt.Printf("  %s\n", ui.StyleSuccess.Render(fmt.Sprintf("All %d required variables set", total)))
+		fmt.Printf(fmtSingleItem, ui.StyleSuccess.Render(fmt.Sprintf("All %d required variables set", total)))
 	}
 }
 
@@ -249,7 +299,10 @@ func requireFile(path string) error {
 }
 
 func mustCwd() string {
-	cwd, _ := os.Getwd()
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "."
+	}
 	return cwd
 }
 
@@ -289,7 +342,10 @@ func repeatStr(s string, n int) string {
 
 // loadConfig is a convenience to load project config (used by commands that need it).
 func loadConfig() (*config.Config, error) {
-	cwd, _ := os.Getwd()
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil, fmt.Errorf("getting working directory: %w", err)
+	}
 	return config.Load(cwd)
 }
 
@@ -299,8 +355,9 @@ func dbCheckCmd() *cobra.Command {
 	var timeout int
 
 	cmd := &cobra.Command{
-		Use:   "db-check",
-		Short: "Test database connectivity using .env credentials",
+		Use:        "db-check",
+		Short:      "Test database connectivity using .env credentials",
+		Deprecated: "use 'go-tk env check --db' instead",
 		Long: `Pre-flight database connectivity check.
 
 Tests that the database is reachable using credentials from .env.
@@ -338,93 +395,109 @@ func runDBCheck(timeoutSec int) error {
 
 	ui.PrintSection("Database connectivity check")
 
-	// Load environment variables
 	envVars, err := parseEnvFile(envFile)
 	if err != nil {
 		return fmt.Errorf("parsing .env: %w", err)
 	}
 
-	driver := envVars["DB_DRIVER"]
-	host := envVars["DB_HOST"]
-	port := envVars["DB_PORT"]
-	user := envVars["DB_USER"]
-	password := envVars["DB_PASSWORD"]
-	dbname := envVars["DB_NAME"]
-	sslmode := envVars["DB_SSL_MODE"]
-
-	// Validate required fields
-	missing := []string{}
-	if driver == "" {
-		missing = append(missing, "DB_DRIVER")
-	}
-	if host == "" {
-		missing = append(missing, "DB_HOST")
-	}
-	if port == "" {
-		missing = append(missing, "DB_PORT")
-	}
-	if user == "" {
-		missing = append(missing, "DB_USER")
-	}
-	if dbname == "" {
-		missing = append(missing, "DB_NAME")
-	}
-
+	c, missing := extractDBVars(envVars)
 	if len(missing) > 0 {
+		return reportMissingDBVars(missing)
+	}
+	c.timeoutSec = timeoutSec
+
+	if !ui.Quiet {
+		printDBInfo(c)
+		fmt.Printf("  Testing connection...")
+	}
+
+	if _, err := buildDSN(c); err != nil {
+		return err
+	}
+
+	if err := testTCPConnection(c.host, c.port, timeoutSec); err != nil {
+		if !ui.Quiet {
+			fmt.Printf(" %s\n\n  %s\n", ui.StyleError.Render("FAILED"), ui.StyleError.Render("Database is unreachable: "+err.Error()))
+			ui.PrintHint("Check that the database is running and network is accessible.")
+			ui.PrintHint("Verify DB_HOST and DB_PORT in .env")
+		}
+		return fmt.Errorf("database connectivity check failed: %s", err.Error())
+	}
+
+	if !ui.Quiet {
+		fmt.Printf(" %s\n\n", ui.StyleSuccess.Render("OK"))
+	}
+	ui.PrintDone("Database is reachable at " + c.host + ":" + c.port)
+	ui.PrintHint("Note: This only tests TCP connectivity. Run 'go-tk migrate status' to verify credentials.")
+	return nil
+}
+
+// dbConnConfig holds the resolved database connection parameters.
+type dbConnConfig struct {
+	driver, host, port, user, password, dbname, sslmode string
+	timeoutSec                                          int
+}
+
+// extractDBVars pulls required DB config values from the env map and lists any that are missing.
+func extractDBVars(envVars map[string]string) (dbConnConfig, []string) {
+	c := dbConnConfig{
+		driver:   envVars["DB_DRIVER"],
+		host:     envVars["DB_HOST"],
+		port:     envVars["DB_PORT"],
+		user:     envVars["DB_USER"],
+		password: envVars["DB_PASSWORD"],
+		dbname:   envVars["DB_NAME"],
+		sslmode:  envVars["DB_SSL_MODE"],
+	}
+
+	var missing []string
+	for _, check := range []struct{ val, name string }{
+		{c.driver, "DB_DRIVER"}, {c.host, "DB_HOST"}, {c.port, "DB_PORT"},
+		{c.user, "DB_USER"}, {c.dbname, "DB_NAME"},
+	} {
+		if check.val == "" {
+			missing = append(missing, check.name)
+		}
+	}
+	return c, missing
+}
+
+// reportMissingDBVars prints and returns an error for missing DB variables.
+func reportMissingDBVars(missing []string) error {
+	if !ui.Quiet {
 		for _, m := range missing {
 			fmt.Printf("  %s %s not set in .env\n", ui.StyleError.Render("✗"), m)
 		}
-		return fmt.Errorf("missing required database environment variables")
 	}
+	return fmt.Errorf("missing required database environment variables: %s", strings.Join(missing, ", "))
+}
 
-	fmt.Printf("  Driver:   %s\n", driver)
-	fmt.Printf("  Host:     %s:%s\n", host, port)
-	fmt.Printf("  Database: %s\n", dbname)
-	fmt.Printf("  User:     %s\n", user)
-	fmt.Printf("  Timeout:  %ds\n", timeoutSec)
+// printDBInfo prints the resolved DB connection parameters.
+func printDBInfo(c dbConnConfig) {
+	fmt.Printf("  Driver:   %s\n", c.driver)
+	fmt.Printf("  Host:     %s:%s\n", c.host, c.port)
+	fmt.Printf("  Database: %s\n", c.dbname)
+	fmt.Printf("  User:     %s\n", c.user)
+	fmt.Printf("  Timeout:  %ds\n", c.timeoutSec)
 	fmt.Println()
+}
 
-	// Build connection string and test
-	var dsn string
-	switch driver {
+// buildDSN constructs the driver-specific connection string.
+func buildDSN(c dbConnConfig) (string, error) {
+	switch c.driver {
 	case "postgres":
+		sslmode := c.sslmode
 		if sslmode == "" {
 			sslmode = "disable"
 		}
-		dsn = fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=%s connect_timeout=%d",
-			host, port, user, password, dbname, sslmode, timeoutSec)
+		return fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=%s connect_timeout=%d",
+			c.host, c.port, c.user, c.password, c.dbname, sslmode, c.timeoutSec), nil
 	case "mysql":
-		dsn = fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?timeout=%ds&parseTime=true",
-			user, password, host, port, dbname, timeoutSec)
+		return fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?timeout=%ds&parseTime=true",
+			c.user, c.password, c.host, c.port, c.dbname, c.timeoutSec), nil
 	default:
-		return fmt.Errorf("unsupported DB_DRIVER: %s (valid: postgres, mysql)", driver)
+		return "", fmt.Errorf("unsupported DB_DRIVER: %s (valid: postgres, mysql)", c.driver)
 	}
-
-	// Test connection using exec (no direct DB driver dependency in go-tk)
-	// We use a simple TCP ping as a lightweight check
-	fmt.Printf("  Testing connection...")
-
-	if err := testTCPConnection(host, port, timeoutSec); err != nil {
-		fmt.Printf(" %s\n", ui.StyleError.Render("FAILED"))
-		fmt.Printf("\n  %s\n", ui.StyleError.Render("Database is unreachable: "+err.Error()))
-		ui.PrintHint("Check that the database is running and network is accessible.")
-		ui.PrintHint("Verify DB_HOST and DB_PORT in .env")
-		return fmt.Errorf("database connectivity check failed")
-	}
-
-	fmt.Printf(" %s\n", ui.StyleSuccess.Render("OK"))
-	fmt.Println()
-	ui.PrintDone("Database is reachable at " + host + ":" + port)
-	ui.PrintHint("Note: This only tests TCP connectivity. Run 'go-tk migrate status' to verify credentials.")
-
-	// Print DSN hint (masked password)
-	maskedDSN := dsn
-	if password != "" {
-		maskedDSN = fmt.Sprintf("...password=****...") // Don't show actual DSN with password
-	}
-	_ = maskedDSN // Avoid unused variable
-
-	return nil
 }
 
 // testTCPConnection tests if a TCP connection can be established to host:port.

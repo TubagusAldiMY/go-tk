@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -36,7 +37,6 @@ type NewProjectData struct {
 // If dryRun is true, it prints what would be created without writing files.
 func GenerateProject(opts *ProjectOptions, targetDir string, dryRun bool) error {
 	templateDir := templateDirForStack(opts.Framework, opts.Database)
-
 	engine := generator.NewEngine(TemplatesFS, "project")
 
 	data := NewProjectData{
@@ -52,7 +52,6 @@ func GenerateProject(opts *ProjectOptions, targetDir string, dryRun bool) error 
 		Year:        time.Now().Year(),
 	}
 
-	// List all templates for this stack.
 	templates, err := engine.ListTemplates(templateDir)
 	if err != nil {
 		return fmt.Errorf("listing templates: %w", err)
@@ -65,57 +64,96 @@ func GenerateProject(opts *ProjectOptions, targetDir string, dryRun bool) error 
 	}
 
 	for _, tmplPath := range templates {
-		outPath := resolveOutputPath(targetDir, tmplPath, templateDir)
-
-		if dryRun {
-			ui.PrintDryRun(outPath)
-			continue
-		}
-
-		// Skip .gitkeep — just ensure the directory exists.
-		if strings.HasSuffix(tmplPath, ".gitkeep.tmpl") {
-			if err := generator.EnsureDir(filepath.Dir(outPath)); err != nil {
-				return err
-			}
-			continue
-		}
-
-		// Idempotency: skip files that already exist.
-		if generator.FileExists(outPath) {
-			ui.PrintFileSkipped(outPath)
-			continue
-		}
-
-		rendered, err := engine.Render(tmplPath, data)
-		if err != nil {
-			return fmt.Errorf("rendering %s: %w", tmplPath, err)
-		}
-
-		// Format Go files.
-		if generator.IsGoFile(outPath) {
-			if formatted, err := generator.FormatGo(rendered); err == nil {
-				rendered = formatted
-			}
-		}
-
-		if err := generator.WriteAtomic(outPath, rendered, 0o644); err != nil {
-			return fmt.Errorf("writing %s: %w", outPath, err)
-		}
-		ui.PrintFileCreated(outPath)
-
-		// Run goimports on Go files.
-		if generator.IsGoFile(outPath) {
-			_ = generator.RunGoimports(outPath)
-		}
-	}
-
-	// Write gotk.yaml from the default config.
-	if !dryRun {
-		if err := writeGotkYAML(opts, targetDir); err != nil {
+		if err := renderTemplate(engine, opts, templateDir, targetDir, tmplPath, dryRun, data); err != nil {
 			return err
 		}
 	}
 
+	if dryRun {
+		return nil
+	}
+	return finalizeProject(opts, targetDir)
+}
+
+// renderTemplate processes a single template file, applying CICD gating and dry-run logic.
+func renderTemplate(engine *generator.Engine, opts *ProjectOptions, templateDir, targetDir, tmplPath string, dryRun bool, data NewProjectData) error {
+	if !opts.HasCICD && strings.Contains(tmplPath, ".github/workflows/") {
+		return nil
+	}
+	outPath := resolveOutputPath(targetDir, tmplPath, templateDir)
+	if dryRun {
+		ui.PrintDryRun(outPath)
+		return nil
+	}
+	return processTemplateFile(engine, tmplPath, outPath, data)
+}
+
+// processTemplateFile renders a single template and writes it atomically to outPath.
+func processTemplateFile(engine *generator.Engine, tmplPath, outPath string, data NewProjectData) error {
+	if strings.HasSuffix(tmplPath, ".gitkeep.tmpl") {
+		return generator.EnsureDir(filepath.Dir(outPath))
+	}
+	if generator.FileExists(outPath) {
+		ui.PrintFileSkipped(outPath)
+		return nil
+	}
+
+	rendered, err := engine.Render(tmplPath, data)
+	if err != nil {
+		return fmt.Errorf("rendering %s: %w", tmplPath, err)
+	}
+
+	if generator.IsGoFile(outPath) {
+		if formatted, err := generator.FormatGo(rendered); err == nil {
+			rendered = formatted
+		}
+	}
+
+	if err := generator.WriteAtomic(outPath, rendered, 0o644); err != nil {
+		return fmt.Errorf("writing %s: %w", outPath, err)
+	}
+	ui.PrintFileCreated(outPath)
+
+	if generator.IsGoFile(outPath) {
+		_ = generator.RunGoimports(outPath)
+	}
+	return nil
+}
+
+// finalizeProject writes gotk.yaml and validates the generated project compiles.
+func finalizeProject(opts *ProjectOptions, targetDir string) error {
+	if err := writeGotkYAML(opts, targetDir); err != nil {
+		return err
+	}
+	if err := validateProjectBuild(targetDir); err != nil {
+		return fmt.Errorf("build validation failed — files written to %s but project does not compile: %w", targetDir, err)
+	}
+	return nil
+}
+
+// validateProjectBuild runs go mod tidy and go build ./... in targetDir.
+// go mod tidy failure is reported as a warning but does not prevent go build from running,
+// since tidy can fail in offline/network-restricted environments while the generated code
+// itself may still be structurally valid. Returns an error only when go build fails.
+func validateProjectBuild(targetDir string) error {
+	ui.PrintSection("Validating generated project")
+
+	tidy := exec.Command("go", "mod", "tidy")
+	tidy.Dir = targetDir
+	if out, err := tidy.CombinedOutput(); err != nil {
+		if !ui.Quiet {
+			fmt.Printf("  ! go mod tidy: %s\n", string(out))
+			ui.PrintHint("Network may be unavailable — continuing to build check anyway.")
+		}
+	}
+
+	build := exec.Command("go", "build", "./...")
+	build.Dir = targetDir
+	if out, err := build.CombinedOutput(); err != nil {
+		return fmt.Errorf("go build failed:\n%s", string(out))
+	}
+
+	ui.PrintDone("Generated project compiles successfully")
 	return nil
 }
 

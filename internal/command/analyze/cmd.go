@@ -31,8 +31,8 @@
 //
 // Output Modes:
 //   - Text (default): Human-readable colored output with progress bars
-//   - JSON (TODO #5): Machine-readable for CI pipelines
-//   - HTML (TODO #5): Web report with charts and filtering
+//   - JSON: Machine-readable for CI pipelines
+//   - HTML: Web report with charts and filtering
 //
 // CI Integration:
 //
@@ -56,6 +56,12 @@ import (
 	"github.com/TubagusAldiMY/go-tk/internal/ui"
 )
 
+const (
+	internalDir            = "/internal"
+	msgScoreBelowThreshold = "health score %d is below minimum threshold %d"
+	fmtScoreBar            = "%3d/100"
+)
+
 // JSONOutput is the machine-readable output format for CI integration.
 // Follows the standard response envelope pattern from AGENTS.md Section 5.4.
 type JSONOutput struct {
@@ -66,10 +72,10 @@ type JSONOutput struct {
 
 // JSONOutputData contains the analysis results.
 type JSONOutputData struct {
-	HealthScore int           `json:"health_score"`
-	Grade       string        `json:"grade"`
-	Issues      []JSONIssue   `json:"issues"`
-	Summary     IssueSummary  `json:"summary"`
+	HealthScore int          `json:"health_score"`
+	Grade       string       `json:"grade"`
+	Issues      []JSONIssue  `json:"issues"`
+	Summary     IssueSummary `json:"summary"`
 }
 
 // JSONIssue is a single issue in JSON format.
@@ -125,7 +131,10 @@ Use --fail-under in CI pipelines to enforce a minimum health score:
   go-tk analyze --fail-under=75
 
 Use --output=json for machine-readable output (CI integration):
-  go-tk analyze --output=json`,
+  go-tk analyze --output=json
+
+Use --output=html to generate an HTML report file:
+  go-tk analyze --output=html`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runAnalyze(minSeverity, failUnder, outputFormat)
 		},
@@ -133,18 +142,20 @@ Use --output=json for machine-readable output (CI integration):
 
 	cmd.Flags().StringVar(&minSeverity, "min-severity", "low", "Minimum severity to report (critical|high|medium|low|info)")
 	cmd.Flags().IntVar(&failUnder, "fail-under", 0, "Exit with code 1 if health score is below this threshold (0 = disabled)")
-	cmd.Flags().StringVarP(&outputFormat, "output", "o", "text", "Output format: text | json")
+	cmd.Flags().StringVarP(&outputFormat, "output", "o", "text", "Output format: text | json | html")
 
 	return cmd
 }
 
 func runAnalyze(minSeverityStr string, failUnder int, outputFormat string) error {
-	// Validate output format
-	if outputFormat != "text" && outputFormat != "json" {
-		return fmt.Errorf("invalid output format: %s (valid: text, json)", outputFormat)
+	if outputFormat != "text" && outputFormat != "json" && outputFormat != "html" {
+		return fmt.Errorf("invalid output format: %s (valid: text, json, html)", outputFormat)
 	}
 
-	cwd, _ := os.Getwd()
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("getting working directory: %w", err)
+	}
 	cfg, err := config.Load(cwd)
 	if err != nil {
 		if outputFormat == "json" {
@@ -153,61 +164,65 @@ func runAnalyze(minSeverityStr string, failUnder int, outputFormat string) error
 		return config.ErrConfigNotFound
 	}
 
-	// Skip banner for JSON output
 	if outputFormat != "json" {
-		fmt.Println()
-		fmt.Println(ui.Banner())
-		fmt.Println()
+		ui.PrintBanner()
 		ui.PrintSection("Analyzing project: " + cfg.Project.Name)
 	}
 
 	result := &types.AnalysisResult{}
+	runChecks(result, cwd, cfg.Paths.Handlers)
+	result.HealthScore = types.ComputeHealthScore(result.Issues)
 
-	// Run all checks
+	return renderOutput(result, cfg.Project.Name, minSeverityStr, outputFormat, failUnder)
+}
+
+// runChecks executes all static analysis checks and accumulates results.
+func runChecks(result *types.AnalysisResult, cwd, handlersPath string) {
 	runCheck(result, "Unhandled errors", func() ([]types.Issue, int, error) {
-		return checks.CheckUnhandledErrors(cwd + "/internal")
+		return checks.CheckUnhandledErrors(cwd + internalDir)
 	})
-
 	runCheck(result, "Missing input validation", func() ([]types.Issue, int, error) {
-		return checks.CheckMissingValidation(cfg.Paths.Handlers)
+		return checks.CheckMissingValidation(handlersPath)
 	})
-
 	runCheck(result, "N+1 query patterns", func() ([]types.Issue, int, error) {
-		return checks.CheckNPlusOne(cwd + "/internal")
+		return checks.CheckNPlusOne(cwd + internalDir)
 	})
-
 	runCheck(result, "Hardcoded values", func() ([]types.Issue, int, error) {
-		return checks.CheckHardcodedValues(cwd + "/internal")
+		return checks.CheckHardcodedValues(cwd + internalDir)
 	})
-
 	runCheck(result, "Dead routes & orphaned handlers", func() ([]types.Issue, int, error) {
-		return checks.CheckDeadRoutes(cwd + "/internal")
+		return checks.CheckDeadRoutes(cwd + internalDir)
 	})
-
 	runCheck(result, "Missing auth middleware", func() ([]types.Issue, int, error) {
-		return checks.CheckMissingAuth(cwd + "/internal")
+		return checks.CheckMissingAuth(cwd + internalDir)
 	})
-
 	runCheck(result, "Circular imports", func() ([]types.Issue, int, error) {
 		return checks.CheckCircularImports(cwd)
 	})
+}
 
-	// Compute health score
-	result.HealthScore = types.ComputeHealthScore(result.Issues)
-
-	// Output based on format
+// renderOutput routes the analysis result to the appropriate output format.
+func renderOutput(result *types.AnalysisResult, projectName, minSeverityStr, outputFormat string, failUnder int) error {
 	if outputFormat == "json" {
-		return outputJSON(result, cfg.Project.Name, failUnder)
+		return outputJSON(result, projectName, failUnder)
 	}
-
-	// Print text report
+	if outputFormat == "html" {
+		filename, err := outputHTML(result, projectName)
+		if err != nil {
+			return err
+		}
+		ui.PrintDone("HTML report written to " + filename)
+		return checkFailUnder(result.HealthScore, failUnder)
+	}
 	printReport(result, parseSeverity(minSeverityStr))
+	return checkFailUnder(result.HealthScore, failUnder)
+}
 
-	// Enforce minimum health score for CI pipelines.
-	if failUnder > 0 && result.HealthScore < failUnder {
-		return fmt.Errorf("health score %d is below minimum threshold %d", result.HealthScore, failUnder)
+// checkFailUnder returns an error if the health score is below the CI threshold.
+func checkFailUnder(score, failUnder int) error {
+	if failUnder > 0 && score < failUnder {
+		return fmt.Errorf(msgScoreBelowThreshold, score, failUnder)
 	}
-
 	return nil
 }
 
@@ -262,12 +277,7 @@ func outputJSON(result *types.AnalysisResult, projectName string, failUnder int)
 		return fmt.Errorf("encoding JSON: %w", err)
 	}
 
-	// Return error if below threshold (for CI exit code)
-	if failUnder > 0 && result.HealthScore < failUnder {
-		return fmt.Errorf("health score %d is below minimum threshold %d", result.HealthScore, failUnder)
-	}
-
-	return nil
+	return checkFailUnder(result.HealthScore, failUnder)
 }
 
 // outputJSONError outputs an error in JSON format.
@@ -360,13 +370,13 @@ func printHealthScore(result *types.AnalysisResult) {
 	var gradeRendered string
 	switch {
 	case score >= 90:
-		scoreRendered = ui.StyleSuccess.Render(fmt.Sprintf("%3d/100", score))
+		scoreRendered = ui.StyleSuccess.Render(fmt.Sprintf(fmtScoreBar, score))
 		gradeRendered = ui.StyleSuccess.Render(grade)
 	case score >= 60:
-		scoreRendered = ui.StyleWarning.Render(fmt.Sprintf("%3d/100", score))
+		scoreRendered = ui.StyleWarning.Render(fmt.Sprintf(fmtScoreBar, score))
 		gradeRendered = ui.StyleWarning.Render(grade)
 	default:
-		scoreRendered = ui.StyleError.Render(fmt.Sprintf("%3d/100", score))
+		scoreRendered = ui.StyleError.Render(fmt.Sprintf(fmtScoreBar, score))
 		gradeRendered = ui.StyleError.Render(grade)
 	}
 
